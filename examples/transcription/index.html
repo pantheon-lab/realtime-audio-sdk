@@ -1,0 +1,189 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Realtime Audio SDK - Transcription Example</title>
+  <style>
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+      max-width: 900px;
+      margin: 0 auto;
+      padding: 20px;
+    }
+    .controls {
+      margin: 20px 0;
+    }
+    button {
+      padding: 10px 20px;
+      margin: 5px;
+      font-size: 14px;
+      cursor: pointer;
+    }
+    .status {
+      padding: 10px;
+      margin: 10px 0;
+      background: #f0f0f0;
+      border-radius: 4px;
+    }
+    .transcript {
+      background: white;
+      border: 1px solid #ddd;
+      border-radius: 4px;
+      padding: 20px;
+      min-height: 300px;
+      margin: 20px 0;
+    }
+    .speaking-indicator {
+      display: inline-block;
+      width: 10px;
+      height: 10px;
+      border-radius: 50%;
+      background: #ccc;
+      margin-right: 10px;
+    }
+    .speaking-indicator.active {
+      background: #4ecdc4;
+      animation: pulse 1s infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.5; }
+    }
+  </style>
+</head>
+<body>
+  <h1>Realtime Audio SDK - Transcription Example</h1>
+
+  <div class="status">
+    <span class="speaking-indicator" id="indicator"></span>
+    <strong>Status:</strong> <span id="status">Idle</span>
+  </div>
+
+  <div class="controls">
+    <button id="startBtn">Start Transcription</button>
+    <button id="stopBtn" disabled>Stop Transcription</button>
+  </div>
+
+  <h3>Transcript</h3>
+  <div class="transcript" id="transcript">
+    <p style="color: #999;">Click "Start Transcription" to begin...</p>
+  </div>
+
+  <script type="module">
+    import { RealtimeAudioSDK } from '../../src/index.ts';
+
+    let sdk = null;
+    let ws = null;
+
+    const startBtn = document.getElementById('startBtn');
+    const stopBtn = document.getElementById('stopBtn');
+    const statusEl = document.getElementById('status');
+    const transcriptEl = document.getElementById('transcript');
+    const indicator = document.getElementById('indicator');
+
+    // Initialize SDK
+    sdk = new RealtimeAudioSDK({
+      frameSize: 20,
+      sampleRate: 16000,
+      channelCount: 1,
+      encoding: {
+        enabled: true,
+        codec: 'opus',
+        bitrate: 16000,
+      },
+      processing: {
+        vad: {
+          enabled: true,
+          threshold: 0.02,
+        },
+      },
+    });
+
+    // Setup SDK events (new unified structure)
+    sdk.on('audio', (event) => {
+      const { audio, metadata, processing } = event;
+
+      // Send encoded audio to transcription service via WebSocket
+      if (ws && ws.readyState === WebSocket.OPEN && audio.encoded) {
+        ws.send(audio.encoded);
+      }
+
+      // Update speaking indicator based on VAD
+      if (processing.vad?.active) {
+        if (processing.vad.isSpeech) {
+          indicator.classList.add('active');
+        } else {
+          indicator.classList.remove('active');
+        }
+      }
+    });
+
+    // State changes
+    sdk.on('state', (state) => {
+      statusEl.textContent = state.charAt(0).toUpperCase() + state.slice(1);
+      startBtn.disabled = state !== 'idle';
+      stopBtn.disabled = state === 'idle';
+    });
+
+    // Error handling
+    sdk.on('error', (error) => {
+      addTranscript(`Error: ${error.message}`, 'error');
+    });
+
+    // WebSocket connection (example - replace with your transcription service)
+    function connectWebSocket() {
+      // Example: ws = new WebSocket('wss://your-transcription-service.com/ws');
+
+      // Simulated WebSocket for demo
+      console.log('WebSocket connection would be established here');
+
+      // In a real implementation:
+      // ws.onmessage = (event) => {
+      //   const result = JSON.parse(event.data);
+      //   addTranscript(result.text);
+      // };
+    }
+
+    // Add transcript text
+    function addTranscript(text, type = 'normal') {
+      const p = document.createElement('p');
+      p.textContent = text;
+      if (type === 'error') {
+        p.style.color = '#ff6b6b';
+      }
+      transcriptEl.appendChild(p);
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+
+    // Start button
+    startBtn.addEventListener('click', async () => {
+      try {
+        transcriptEl.innerHTML = '';
+        addTranscript('Starting transcription...', 'info');
+
+        connectWebSocket();
+        await sdk.start();
+
+        addTranscript('Transcription started. Speak into your microphone.', 'info');
+      } catch (error) {
+        addTranscript(`Failed to start: ${error.message}`, 'error');
+      }
+    });
+
+    // Stop button
+    stopBtn.addEventListener('click', async () => {
+      try {
+        await sdk.stop();
+        if (ws) {
+          ws.close();
+          ws = null;
+        }
+        addTranscript('Transcription stopped.', 'info');
+      } catch (error) {
+        addTranscript(`Failed to stop: ${error.message}`, 'error');
+      }
+    });
+  </script>
+</body>
+</html>

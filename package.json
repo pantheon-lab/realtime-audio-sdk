@@ -1,0 +1,62 @@
+{
+  "name": "@realtime-ai/audio-sdk",
+  "version": "0.1.0",
+  "description": "Realtime Audio SDK for the Web — audio capture, echo cancellation (AEC), voice activity detection (VAD), and real-time encoding (Opus/AAC/PCM)",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "require": "./dist/index.cjs",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint src --ext .ts",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:coverage": "vitest --coverage",
+    "test:vad": "node tests/run-vad-test.js",
+    "test:vad:accuracy": "vitest run tests/vad-accuracy.test.ts --reporter=verbose",
+    "download-model": "node scripts/download-silero-model.js"
+  },
+  "keywords": [
+    "audio",
+    "realtime",
+    "opus",
+    "webcodecs",
+    "vad",
+    "aec",
+    "speech",
+    "transcription",
+    "web-audio"
+  ],
+  "author": "realtime-ai",
+  "license": "MIT",
+  "devDependencies": {
+    "@types/node": "^20.11.5",
+    "@typescript-eslint/eslint-plugin": "^6.19.1",
+    "@typescript-eslint/parser": "^6.19.1",
+    "eslint": "^8.56.0",
+    "terser": "^5.44.0",
+    "typescript": "^5.3.3",
+    "vite": "^5.0.12",
+    "vite-plugin-dts": "^3.7.2",
+    "vitest": "^1.2.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "onnxruntime-web": "^1.23.0"
+  }
+}
