@@ -219,4 +219,49 @@ export class AudioLoader {
       zeroCrossings
     };
   }
+
+  /**
+   * Save Float32Array audio data as WAV file
+   */
+  static saveWavFile(
+    filePath: string,
+    samples: Float32Array,
+    sampleRate: number = 16000,
+    channels: number = 1
+  ): void {
+    const bitsPerSample = 16;
+    const byteRate = sampleRate * channels * (bitsPerSample / 8);
+    const blockAlign = channels * (bitsPerSample / 8);
+    const dataSize = samples.length * (bitsPerSample / 8);
+    const fileSize = 44 + dataSize;
+
+    // Create buffer for WAV file
+    const buffer = Buffer.alloc(fileSize);
+
+    // Write WAV header
+    buffer.write('RIFF', 0);                          // ChunkID
+    buffer.writeUInt32LE(fileSize - 8, 4);            // ChunkSize
+    buffer.write('WAVE', 8);                          // Format
+    buffer.write('fmt ', 12);                         // Subchunk1ID
+    buffer.writeUInt32LE(16, 16);                     // Subchunk1Size (PCM)
+    buffer.writeUInt16LE(1, 20);                      // AudioFormat (PCM)
+    buffer.writeUInt16LE(channels, 22);               // NumChannels
+    buffer.writeUInt32LE(sampleRate, 24);             // SampleRate
+    buffer.writeUInt32LE(byteRate, 28);               // ByteRate
+    buffer.writeUInt16LE(blockAlign, 32);             // BlockAlign
+    buffer.writeUInt16LE(bitsPerSample, 34);          // BitsPerSample
+    buffer.write('data', 36);                         // Subchunk2ID
+    buffer.writeUInt32LE(dataSize, 40);               // Subchunk2Size
+
+    // Convert Float32 samples to Int16 PCM
+    for (let i = 0; i < samples.length; i++) {
+      const sample = Math.max(-1, Math.min(1, samples[i])); // Clamp to [-1, 1]
+      const int16Sample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
+      buffer.writeInt16LE(Math.round(int16Sample), 44 + i * 2);
+    }
+
+    // Write file to disk
+    const absolutePath = path.resolve(filePath);
+    fs.writeFileSync(absolutePath, buffer);
+  }
 }

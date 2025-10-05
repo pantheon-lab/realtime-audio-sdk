@@ -50,12 +50,6 @@ export interface VADConfig {
   // Model configuration
   /** ONNX model path */
   modelPath?: string;
-  /** Model version (v5: 512 samples, legacy: 1536 samples) */
-  modelVersion?: 'v5' | 'legacy';
-
-  // Advanced options
-  /** Audio buffer size */
-  bufferSize?: number;
 }
 
 // Keep SileroVADConfig as an alias for backward compatibility

@@ -260,6 +260,9 @@ export class RealtimeAudioSDK extends EventEmitter<SDKEvents> {
     }
 
     try {
+      // Flush any pending VAD speech segment
+      this.audioProcessor.flush();
+
       await this.audioCapture.stop();
 
       if (this.encoder) {
@@ -322,6 +325,15 @@ export class RealtimeAudioSDK extends EventEmitter<SDKEvents> {
     if (wasRecording) {
       await this.start();
     }
+  }
+
+  /**
+   * Flush any pending speech segment
+   * Useful when you want to force save the current speech segment
+   * @param timestamp Optional timestamp to use as end time
+   */
+  flush(timestamp?: number): void {
+    this.audioProcessor.flush(timestamp);
   }
 
   /**

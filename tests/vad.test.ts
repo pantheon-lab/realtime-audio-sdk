@@ -6,8 +6,7 @@ import type {
   AudioProcessorResult,
   VADStateEvent,
   VADSegmentEvent,
-  EnergyVADConfig,
-  SileroVADConfig
+  VADConfig
 } from '../src/types';
 
 describe('VAD (Voice Activity Detection) Tests', () => {
@@ -30,94 +29,9 @@ describe('VAD (Voice Activity Detection) Tests', () => {
     });
   });
 
-  describe('Energy-based VAD', () => {
-    let processor: AudioProcessor;
-    let detectedSpeechFrames: number;
-    let totalFrames: number;
-
-    beforeEach(() => {
-      detectedSpeechFrames = 0;
-      totalFrames = 0;
-    });
-
-    it('should detect speech with default settings', async () => {
-      const config: EnergyVADConfig = {
-        enabled: true,
-        provider: 'energy',
-        threshold: 0.01,  // Lower threshold for test audio
-        minSpeechDuration: 100,
-        minSilenceDuration: 300
-      };
-
-      processor = new AudioProcessor({
-        vad: config
-      });
-
-      const results: AudioProcessorResult[] = [];
-
-      // Process all frames
-      for (let i = 0; i < audioFrames.length; i++) {
-        const timestamp = (i * 20); // 20ms per frame
-        const result = await processor.process(audioFrames[i], timestamp);
-        results.push(result);
-
-        if (result.vad?.isSpeech) {
-          detectedSpeechFrames++;
-        }
-        totalFrames++;
-      }
-
-      // Verify detection results
-      expect(totalFrames).toBeGreaterThan(0);
-      expect(detectedSpeechFrames).toBeGreaterThan(0);
-
-      const speechRatio = detectedSpeechFrames / totalFrames;
-      console.log(`Energy VAD: Detected speech in ${(speechRatio * 100).toFixed(1)}% of frames`);
-
-      // Should detect some speech but not all frames
-      expect(speechRatio).toBeGreaterThan(0.1);
-      expect(speechRatio).toBeLessThan(0.9);
-    });
-
-    it('should respect minimum speech duration', async () => {
-      const config: EnergyVADConfig = {
-        enabled: true,
-        provider: 'energy',
-        threshold: 0.01,
-        minSpeechDuration: 500,  // 500ms minimum
-        minSilenceDuration: 300
-      };
-
-      processor = new AudioProcessor({
-        vad: config
-      });
-
-      let speechStarted = false;
-      let speechStartTime = 0;
-      let shortSpeechSegments = 0;
-
-      for (let i = 0; i < audioFrames.length; i++) {
-        const timestamp = (i * 20);
-        const result = await processor.process(audioFrames[i], timestamp);
-
-        if (!speechStarted && result.vad?.isSpeech) {
-          speechStarted = true;
-          speechStartTime = timestamp;
-        } else if (speechStarted && !result.vad?.isSpeech) {
-          const duration = timestamp - speechStartTime;
-          if (duration < 500) {
-            shortSpeechSegments++;
-          }
-          speechStarted = false;
-        }
-      }
-
-      // With high min duration, should filter out short segments
-      expect(shortSpeechSegments).toBe(0);
-    });
-
+  describe('Energy Calculation', () => {
     it('should calculate energy correctly', async () => {
-      processor = new AudioProcessor({
+      const processor = new AudioProcessor({
         vad: {
           enabled: false  // Disable VAD to test energy calculation
         }
@@ -145,9 +59,7 @@ describe('VAD (Voice Activity Detection) Tests', () => {
       const minEnergy = Math.min(...energyValues);
       expect(maxEnergy).toBeLessThanOrEqual(1.0);
       expect(minEnergy).toBeGreaterThanOrEqual(0);
-    });
 
-    afterAll(() => {
       processor.close();
     });
   });
@@ -163,15 +75,13 @@ describe('VAD (Voice Activity Detection) Tests', () => {
     });
 
     it('should initialize and process audio with Silero VAD', async () => {
-      const config: SileroVADConfig = {
+      const config: VADConfig = {
         enabled: true,
-        provider: 'silero',
         positiveSpeechThreshold: 0.3,
         negativeSpeechThreshold: 0.25,
-        silenceDuration: 1400,
-        preSpeechPadDuration: 800,
+        silenceDuration: 800,
+        preSpeechPadDuration: 500,
         minSpeechDuration: 400,
-        returnProbabilities: true,
         modelPath: path.join(__dirname, '../public/models/silero_vad_v5.onnx')
       };
 
@@ -211,6 +121,8 @@ describe('VAD (Voice Activity Detection) Tests', () => {
         }
       }
 
+      processor.flush();
+
       // Verify Silero VAD detected speech
       expect(detectedSpeechFrames).toBeGreaterThan(0);
 
@@ -219,14 +131,49 @@ describe('VAD (Voice Activity Detection) Tests', () => {
       const endEvents = speechStateEvents.filter(e => e.type === 'end');
 
       // Verify events were fired
-      console.log('Silero VAD Results:', {
+      console.log('\n=== Silero VAD Detection Results ===');
+      console.log('Overall Statistics:', {
         speechFrames: detectedSpeechFrames,
         totalFrames: audioFrames.length,
         speechRatio: `${(detectedSpeechFrames / audioFrames.length * 100).toFixed(1)}%`,
-        speechSegments: speechSegments.length,
+        totalSegments: speechSegments.length,
         startEvents: startEvents.length,
         endEvents: endEvents.length
       });
+
+      // Log detailed segment information
+      if (speechSegments.length > 0) {
+        console.log('\nDetected Speech Segments:');
+        speechSegments.forEach((segment, index) => {
+          console.log(`  Segment ${index + 1}:`, {
+            startTime: `${segment.startTime}ms`,
+            endTime: `${segment.endTime}ms`,
+            duration: `${segment.duration}ms`,
+            audioSamples: segment.audio ? segment.audio.length : 0,
+            avgProbability: segment.avgProbability.toFixed(3),
+            confidence: segment.confidence.toFixed(3)
+          });
+
+          // Save each segment as WAV file
+          if (segment.audio && segment.audio.length > 0) {
+            const fileName = `segment_${index + 1}_${segment.startTime}ms-${segment.endTime}ms.wav`;
+            const filePath = path.join(__dirname, fileName);
+            AudioLoader.saveWavFile(filePath, segment.audio, audioData.sampleRate);
+            console.log(`    Saved to: ${fileName}`);
+          }
+        });
+
+        // Calculate total speech duration
+        const totalSpeechDuration = speechSegments.reduce((sum, seg) => sum + seg.duration, 0);
+        const avgSegmentDuration = totalSpeechDuration / speechSegments.length;
+
+        console.log('\nSegment Statistics:');
+        console.log(`  Total speech duration: ${totalSpeechDuration}ms`);
+        console.log(`  Average segment duration: ${avgSegmentDuration.toFixed(1)}ms`);
+        console.log(`  Shortest segment: ${Math.min(...speechSegments.map(s => s.duration))}ms`);
+        console.log(`  Longest segment: ${Math.max(...speechSegments.map(s => s.duration))}ms`);
+      }
+      console.log('=' + '='.repeat(35) + '\n');
 
       // Should have detected speech segments
       expect(startEvents.length).toBeGreaterThan(0);
@@ -237,6 +184,7 @@ describe('VAD (Voice Activity Detection) Tests', () => {
       speechSegments.forEach(segment => {
         expect(segment.duration).toBeGreaterThan(0);
         expect(segment.endTime).toBeGreaterThan(segment.startTime);
+        expect(segment.duration).toBe(segment.endTime - segment.startTime);
         if (segment.audio) {
           expect(segment.audio.length).toBeGreaterThan(0);
         }
@@ -244,12 +192,10 @@ describe('VAD (Voice Activity Detection) Tests', () => {
     });
 
     it('should return consistent probabilities', async () => {
-      const config: SileroVADConfig = {
+      const config: VADConfig = {
         enabled: true,
-        provider: 'silero',
         positiveSpeechThreshold: 0.3,
         negativeSpeechThreshold: 0.25,
-        returnProbabilities: true,
         modelPath: path.join(__dirname, '../public/models/silero_vad_v5.onnx')
       };
 
@@ -287,9 +233,8 @@ describe('VAD (Voice Activity Detection) Tests', () => {
 
     it('should respect configuration thresholds', async () => {
       // Test with high thresholds (less sensitive)
-      const strictConfig: SileroVADConfig = {
+      const strictConfig: VADConfig = {
         enabled: true,
-        provider: 'silero',
         positiveSpeechThreshold: 0.7,  // Very high threshold
         negativeSpeechThreshold: 0.6,
         silenceDuration: 500,
@@ -315,9 +260,8 @@ describe('VAD (Voice Activity Detection) Tests', () => {
       }
 
       // Now test with low thresholds (more sensitive)
-      const sensitiveConfig: SileroVADConfig = {
+      const sensitiveConfig: VADConfig = {
         enabled: true,
-        provider: 'silero',
         positiveSpeechThreshold: 0.1,  // Very low threshold
         negativeSpeechThreshold: 0.05,
         silenceDuration: 2000,
@@ -353,6 +297,62 @@ describe('VAD (Voice Activity Detection) Tests', () => {
       await sensitiveProcessor.close();
     });
 
+    it('should flush pending speech segment on close', async () => {
+      const config: VADConfig = {
+        enabled: true,
+        positiveSpeechThreshold: 0.3,
+        negativeSpeechThreshold: 0.25,
+        silenceDuration: 800,
+        minSpeechDuration: 400,
+        modelPath: path.join(__dirname, '../public/models/silero_vad_v5.onnx')
+      };
+
+      processor = new AudioProcessor({
+        vad: config
+      });
+
+      await processor.initialize();
+
+      const speechSegments: VADSegmentEvent[] = [];
+
+      processor.on('speech-segment', (segment: VADSegmentEvent) => {
+        speechSegments.push(segment);
+      });
+
+      // Process only first half of audio (simulate incomplete stream)
+      const halfFrames = Math.floor(audioFrames.length / 2);
+      for (let i = 0; i < halfFrames; i++) {
+        const timestamp = (i * 20);
+        await processor.process(audioFrames[i], timestamp);
+      }
+
+      // Close processor (should flush any pending speech segment)
+      await processor.close();
+
+      console.log('Flush test - segments captured:', speechSegments.length);
+
+      // Should have at least one segment even though we didn't process till the end
+      expect(speechSegments.length).toBeGreaterThan(0);
+
+      if (speechSegments.length > 0) {
+        const lastSegment = speechSegments[speechSegments.length - 1];
+        console.log('Last segment (flushed):', {
+          startTime: `${lastSegment.startTime}ms`,
+          endTime: `${lastSegment.endTime}ms`,
+          duration: `${lastSegment.duration}ms`,
+          audioSamples: lastSegment.audio ? lastSegment.audio.length : 0
+        });
+
+        // Save flushed segment
+        if (lastSegment.audio && lastSegment.audio.length > 0) {
+          const fileName = `flushed_segment_${lastSegment.startTime}ms-${lastSegment.endTime}ms.wav`;
+          const filePath = path.join(__dirname, fileName);
+          AudioLoader.saveWavFile(filePath, lastSegment.audio, audioData.sampleRate);
+          console.log(`Saved flushed segment to: ${fileName}`);
+        }
+      }
+    });
+
     afterAll(async () => {
       if (processor) {
         await processor.close();
@@ -360,108 +360,62 @@ describe('VAD (Voice Activity Detection) Tests', () => {
     });
   });
 
-  describe('VAD Comparison (Energy vs Silero)', () => {
-    it('should compare accuracy between Energy and Silero VAD', async () => {
-      // Test Energy VAD
-      const energyProcessor = new AudioProcessor({
+  describe('VAD Processing', () => {
+    it('should process audio efficiently', async () => {
+      const processor = new AudioProcessor({
         vad: {
           enabled: true,
-          provider: 'energy',
-          threshold: 0.01,
-          minSpeechDuration: 100,
-          minSilenceDuration: 300
-        } as EnergyVADConfig
-      });
-
-      let energySpeechFrames = 0;
-      const energyResults: boolean[] = [];
-
-      for (let i = 0; i < audioFrames.length; i++) {
-        const timestamp = (i * 20);
-        const result = await energyProcessor.process(audioFrames[i], timestamp);
-
-        if (result.vad?.isSpeech) {
-          energySpeechFrames++;
-          energyResults.push(true);
-        } else {
-          energyResults.push(false);
-        }
-      }
-
-      // Test Silero VAD
-      const sileroProcessor = new AudioProcessor({
-        vad: {
-          enabled: true,
-          provider: 'silero',
           positiveSpeechThreshold: 0.3,
           negativeSpeechThreshold: 0.25,
           modelPath: path.join(__dirname, '../public/models/silero_vad_v5.onnx')
-        } as SileroVADConfig
+        }
       });
 
-      await sileroProcessor.initialize();
+      await processor.initialize();
 
-      let sileroSpeechFrames = 0;
-      const sileroResults: boolean[] = [];
-      const sileroProbabilities: number[] = [];
+      let speechFrames = 0;
+      const results: boolean[] = [];
+      const probabilities: number[] = [];
 
       for (let i = 0; i < audioFrames.length; i++) {
         const timestamp = (i * 20);
-        const result = await sileroProcessor.process(audioFrames[i], timestamp);
+        const result = await processor.process(audioFrames[i], timestamp);
 
         if (result.vad?.isSpeech) {
-          sileroSpeechFrames++;
-          sileroResults.push(true);
+          speechFrames++;
+          results.push(true);
         } else {
-          sileroResults.push(false);
+          results.push(false);
         }
 
         if (result.vad?.probability !== undefined) {
-          sileroProbabilities.push(result.vad.probability);
+          probabilities.push(result.vad.probability);
         }
       }
 
-      // Calculate agreement between the two methods
-      let agreement = 0;
-      for (let i = 0; i < energyResults.length; i++) {
-        if (energyResults[i] === sileroResults[i]) {
-          agreement++;
-        }
-      }
-
-      const agreementRate = agreement / energyResults.length;
-
-      console.log('VAD Comparison Results:', {
-        energyVAD: {
-          speechFrames: energySpeechFrames,
-          speechRatio: `${(energySpeechFrames / audioFrames.length * 100).toFixed(1)}%`
-        },
-        sileroVAD: {
-          speechFrames: sileroSpeechFrames,
-          speechRatio: `${(sileroSpeechFrames / audioFrames.length * 100).toFixed(1)}%`,
-          avgProbability: (sileroProbabilities.reduce((a, b) => a + b, 0) / sileroProbabilities.length).toFixed(3)
-        },
-        agreement: `${(agreementRate * 100).toFixed(1)}%`
+      console.log('VAD Processing Results:', {
+        speechFrames: speechFrames,
+        speechRatio: `${(speechFrames / audioFrames.length * 100).toFixed(1)}%`,
+        avgProbability: probabilities.length > 0
+          ? (probabilities.reduce((a, b) => a + b, 0) / probabilities.length).toFixed(3)
+          : 'N/A'
       });
 
-      // They should have some agreement but not be identical
-      expect(agreementRate).toBeGreaterThan(0.3);
-      expect(agreementRate).toBeLessThan(1.0);
+      // Should detect some speech
+      expect(speechFrames).toBeGreaterThan(0);
+      expect(speechFrames).toBeLessThan(audioFrames.length);
 
       // Cleanup
-      await energyProcessor.close();
-      await sileroProcessor.close();
+      await processor.close();
     });
   });
 
   describe('Performance Benchmarks', () => {
-    it('should measure processing speed for Energy VAD', async () => {
+    it('should measure processing speed', async () => {
       const processor = new AudioProcessor({
         vad: {
-          enabled: true,
-          provider: 'energy',
-          threshold: 0.01
-        } as EnergyVADConfig
+          enabled: false  // Disable VAD for pure processing speed test
+        }
       });
 
       const startTime = performance.now();
@@ -475,7 +429,7 @@ describe('VAD (Voice Activity Detection) Tests', () => {
       const processingTime = endTime - startTime;
       const realTimeRatio = (audioData.duration * 1000) / processingTime;
 
-      console.log('Energy VAD Performance:', {
+      console.log('Audio Processing Performance:', {
         processingTime: `${processingTime.toFixed(2)}ms`,
         audioLength: `${(audioData.duration * 1000).toFixed(2)}ms`,
         realTimeRatio: `${realTimeRatio.toFixed(2)}x`,
@@ -492,9 +446,8 @@ describe('VAD (Voice Activity Detection) Tests', () => {
       const processor = new AudioProcessor({
         vad: {
           enabled: true,
-          provider: 'silero',
           modelPath: path.join(__dirname, '../public/models/silero_vad_v5.onnx')
-        } as SileroVADConfig
+        }
       });
 
       await processor.initialize();
@@ -534,9 +487,8 @@ describe('VAD (Voice Activity Detection) Tests', () => {
       new AudioProcessor({
         vad: {
           enabled: true,
-          provider: 'silero',
           modelPath: path.join(__dirname, '../public/models/silero_vad_v5.onnx')
-        } as SileroVADConfig
+        } as VADConfig
       });
 
       const afterCreation = process.memoryUsage();
@@ -560,16 +512,14 @@ describe('VAD (Voice Activity Detection) Tests', () => {
     it('should handle empty audio frames', async () => {
       const processor = new AudioProcessor({
         vad: {
-          enabled: true,
-          provider: 'energy'
-        } as EnergyVADConfig
+          enabled: false
+        }
       });
 
       const emptyFrame = new Float32Array(320); // 20ms at 16kHz, all zeros
       const result = await processor.process(emptyFrame, 0);
 
       expect(result).toBeDefined();
-      expect(result.vad?.isSpeech).toBe(false);
       expect(result.energy).toBe(0);
 
       await processor.close();
@@ -578,10 +528,8 @@ describe('VAD (Voice Activity Detection) Tests', () => {
     it('should handle very loud audio', async () => {
       const processor = new AudioProcessor({
         vad: {
-          enabled: true,
-          provider: 'energy',
-          threshold: 0.5
-        } as EnergyVADConfig
+          enabled: false
+        }
       });
 
       const loudFrame = new Float32Array(320);
@@ -597,9 +545,8 @@ describe('VAD (Voice Activity Detection) Tests', () => {
     it('should reset VAD state correctly', async () => {
       const processor = new AudioProcessor({
         vad: {
-          enabled: true,
-          provider: 'energy'
-        } as EnergyVADConfig
+          enabled: true
+        } as VADConfig
       });
 
       // Process some frames

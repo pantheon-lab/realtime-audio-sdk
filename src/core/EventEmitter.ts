@@ -1,4 +1,4 @@
-import type { EventListener } from '@/types';
+import type { EventListener } from '../types';
 
 /**
  * Simple EventEmitter implementation

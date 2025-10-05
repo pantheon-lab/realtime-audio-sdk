@@ -3,9 +3,9 @@ import type {
   ProcessingConfig,
   VADStateEvent,
   VADSegmentEvent
-} from '@/types';
-import { EventEmitter } from '@/core/EventEmitter';
-import { SileroVAD } from '@/vad/SileroVAD';
+} from '../types';
+import { EventEmitter } from '../core/EventEmitter';
+import { SileroVAD } from '../vad/SileroVAD';
 
 interface AudioProcessorEvents {
   'speech-state': (event: VADStateEvent) => void;
@@ -171,6 +171,16 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
   resetVAD(): void {
     if (this.sileroVAD) {
       this.sileroVAD.reset();
+    }
+  }
+
+  /**
+   * Flush any pending speech segment
+   * Useful when audio stream ends to save the last incomplete segment
+   */
+  flush(timestamp?: number): void {
+    if (this.sileroVAD) {
+      this.sileroVAD.flush(timestamp);
     }
   }
 

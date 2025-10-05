@@ -1,6 +1,8 @@
-import * as ort from 'onnxruntime-web';
-import type { SileroVADConfig } from '@/types';
-import { EventEmitter } from '@/core/EventEmitter';
+import type { SileroVADConfig } from '../types';
+import { EventEmitter } from '../core/EventEmitter';
+
+// ONNX Runtime type
+type OrtType = typeof import('onnxruntime-web') | typeof import('onnxruntime-node');
 
 interface VADEventData {
   isSpeech: boolean;
@@ -23,26 +25,28 @@ interface SileroVADEvents {
  * Silero VAD implementation using ONNX Runtime
  */
 export class SileroVAD extends EventEmitter<SileroVADEvents> {
-  private session: ort.InferenceSession | null = null;
+  private ort: OrtType | null = null;
+  private session: any | null = null;
   private config: Required<SileroVADConfig>;
   private state: 'non-speech' | 'speech' = 'non-speech';
 
-  // Model states (LSTM hidden states)
-  private h: ort.Tensor | null = null;
-  private c: ort.Tensor | null = null;
-  private srTensor: ort.Tensor;
+  // Model states
+  private stateTensor: any | null = null; // State tensor [2, 1, 128] for Silero v5
+  private srTensor: any; // Sample rate tensor
 
   // Buffer management
   private audioBuffer: Float32Array[] = [];
   private speechStartTime: number = 0;
   private consecutiveSilenceMs: number = 0;
   private currentSegmentStart: number = 0;
+  private speechStartBufferIndex: number = 0; // Track buffer index when speech starts
   private frameSize: number = 512; // v5 model default
 
   // Sample buffer for handling misaligned chunks
   private sampleBuffer: Float32Array = new Float32Array(0);
   private lastProbability: number = 0;
   private lastIsSpeech: boolean = false;
+  private lastTimestamp: number = 0; // Track last processed timestamp
 
   // Probability tracking
   private positiveSpeechFrames: number = 0;
@@ -60,12 +64,19 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
       preSpeechPadDuration: config.preSpeechPadDuration ?? 800,
       minSpeechDuration: config.minSpeechDuration ?? 400,
       modelPath: config.modelPath ?? '/models/silero_vad_v5.onnx',
-      modelVersion: config.modelVersion ?? 'v5',
-      bufferSize: config.bufferSize ?? (16000 * 2), // 2 seconds buffer
     } as Required<SileroVADConfig>;
 
-    this.frameSize = this.config.modelVersion === 'v5' ? 512 : 1536;
-    this.srTensor = new ort.Tensor('int64', [16000n]);
+    // Silero v5 uses 512 samples per frame (32ms at 16kHz)
+    this.frameSize = 512;
+  }
+
+  /**
+   * Static factory method to create a new instance (similar to reference implementation)
+   */
+  static async create(config: SileroVADConfig): Promise<SileroVAD> {
+    const vad = new SileroVAD(config);
+    await vad.initialize();
+    return vad;
   }
 
   /**
@@ -73,19 +84,43 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
    */
   async initialize(): Promise<void> {
     try {
-      // Configure ONNX Runtime
-      ort.env.wasm.wasmPaths = '/';
+      // Load ONNX Runtime based on environment
+      if (typeof process !== 'undefined' && process.versions && process.versions.node) {
+        // Node.js environment
+        this.ort = (globalThis as any).ort || (await import('onnxruntime-node')).default;
+      } else {
+        // Browser environment
+        this.ort = (await import('onnxruntime-web'));
+      }
+
+      if (!this.ort) {
+        throw new Error('Failed to load ONNX Runtime');
+      }
+
+      // Initialize sample rate tensor (int64 with value 16000)
+      // @ts-ignore - BigInt is needed for int64
+      this.srTensor = new this.ort.Tensor('int64', [16000n]);
+
+      // Determine execution providers based on environment
+      const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
+      const executionProviders = isNode ? ['cpu'] : ['wasm'];
+
+      // Configure ONNX Runtime for browser
+      if (this.ort.env && this.ort.env.wasm && !isNode) {
+        this.ort.env.wasm.wasmPaths = '/';
+      }
 
       // Load ONNX model
-      this.session = await ort.InferenceSession.create(
+      console.log('Loading VAD model...');
+      this.session = await this.ort.InferenceSession.create(
         this.config.modelPath,
         {
-          executionProviders: ['wasm'],
+          executionProviders,
           graphOptimizationLevel: 'all'
         }
       );
 
-      // Initialize model states
+      // Initialize model state
       this.resetStates();
 
       console.log('Silero VAD initialized successfully');
@@ -99,18 +134,13 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
    * Reset LSTM hidden states
    */
   private resetStates(): void {
-    // LSTM hidden states initialization
-    const stateShape: [number, number, number] = [2, 1, 64];
-    this.h = new ort.Tensor(
-      'float32',
-      new Float32Array(2 * 1 * 64).fill(0),
-      stateShape
-    );
-    this.c = new ort.Tensor(
-      'float32',
-      new Float32Array(2 * 1 * 64).fill(0),
-      stateShape
-    );
+    if (!this.ort) {
+      throw new Error('ONNX Runtime not loaded. Call initialize() first.');
+    }
+
+    // Silero v5 uses a combined state tensor [2, 1, 128]
+    const zeroes = Array(2 * 128).fill(0);
+    this.stateTensor = new this.ort.Tensor('float32', zeroes, [2, 1, 128]);
   }
 
   /**
@@ -120,16 +150,27 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     isSpeech: boolean;
     probability: number;
   }> {
+    // Track last timestamp for flush operation
+    this.lastTimestamp = timestamp;
+
     // Ensure audio is at 16kHz (assuming input is already 16kHz)
     // If resampling is needed, it should be added here
 
     // Add to speech segment buffer (for pre-speech padding)
     this.audioBuffer.push(new Float32Array(audioData));
 
-    // Limit buffer size
-    const maxBufferFrames = Math.ceil(this.config.bufferSize / audioData.length);
-    if (this.audioBuffer.length > maxBufferFrames) {
-      this.audioBuffer.shift();
+    // Limit buffer size ONLY when not in speech state
+    // During speech, we need to keep all audio data for the segment
+    if (this.state === 'non-speech') {
+      // Keep enough frames for pre-padding (with some extra margin)
+      const prePadSamples = (this.config.preSpeechPadDuration * 16000) / 1000;
+      const prePadFrames = Math.ceil(prePadSamples / audioData.length);
+      const maxBufferFrames = prePadFrames * 2; // 2x for safety margin
+
+      // Batch deletion when buffer exceeds 1.5x limit to reduce shift() calls
+      if (this.audioBuffer.length > maxBufferFrames * 1.5) {
+        this.audioBuffer = this.audioBuffer.slice(-maxBufferFrames);
+      }
     }
 
     // Concatenate new audio with sample buffer
@@ -202,32 +243,31 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
    * Process a single frame through the model
    */
   private async processFrame(frame: Float32Array, _timestamp: number): Promise<number> {
-    if (!this.session || !this.h || !this.c) {
+    if (!this.session || !this.stateTensor) {
       throw new Error('SileroVAD not initialized');
     }
 
     // Prepare input tensor
-    const inputTensor = new ort.Tensor('float32', frame, [1, frame.length]);
+    const inputTensor = new this.ort!.Tensor('float32', frame, [1, frame.length]);
 
-    // Prepare feeds for the model
-    const feeds: Record<string, ort.Tensor> = {
-      'input': inputTensor,
-      'h': this.h,
-      'c': this.c,
-      'sr': this.srTensor
+    // Prepare feeds for Silero v5 model
+    const inputs = {
+      input: inputTensor,
+      state: this.stateTensor,
+      sr: this.srTensor
     };
 
     // Run inference
-    const results = await this.session.run(feeds);
+    const out = await this.session.run(inputs);
 
-    // Update states
-    this.h = results.hn as ort.Tensor;
-    this.c = results.cn as ort.Tensor;
+    // Update state from output
+    this.stateTensor = out['stateN'] || out['state'];
 
     // Get speech probability
-    const probability = (results.output as ort.Tensor).data[0] as number;
+    const outputData = out['output']?.data;
+    const isSpeech = outputData[0] as number;
 
-    return probability;
+    return isSpeech;
   }
 
   /**
@@ -242,6 +282,15 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
         this.currentSegmentStart = timestamp;
         this.consecutiveSilenceMs = 0;
         this.positiveSpeechFrames = 1;
+
+        // Record buffer index for pre-padding
+        // Calculate how many frames to include for pre-padding (default 800ms)
+        const avgFrameLength = this.audioBuffer.length > 0
+          ? this.audioBuffer[this.audioBuffer.length - 1].length
+          : 320; // Default 20ms frame at 16kHz
+        const prePadSamples = (this.config.preSpeechPadDuration * 16000) / 1000;
+        const prePadFrames = Math.ceil(prePadSamples / avgFrameLength);
+        this.speechStartBufferIndex = Math.max(0, this.audioBuffer.length - prePadFrames);
 
         // Emit speech start event
         const eventData: VADEventData = {
@@ -294,19 +343,26 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     this.state = 'non-speech';
     this.consecutiveSilenceMs = 0;
     this.positiveSpeechFrames = 0;
+    this.speechStartBufferIndex = 0;
+
+    // Clear old audio buffer to prevent memory buildup
+    // Keep only frames needed for pre-padding of next segment
+    const prePadSamples = (this.config.preSpeechPadDuration * 16000) / 1000;
+    const prePadFrames = Math.ceil(prePadSamples / 320); // Assume 20ms frames
+    const maxBufferFrames = prePadFrames * 2; // 2x for safety margin
+
+    if (this.audioBuffer.length > maxBufferFrames) {
+      this.audioBuffer = this.audioBuffer.slice(-maxBufferFrames);
+    }
   }
 
   /**
    * Create a speech segment with pre-padding
    */
   private createSpeechSegment(endTime: number): { start: number; end: number; duration: number; audioData?: Float32Array } {
-    // Calculate pre-padding start position
-    const prePadSamples = (this.config.preSpeechPadDuration * 16000) / 1000;
-    const prePadFrames = Math.ceil(prePadSamples / this.frameSize);
-
-    // Extract audio data from buffer (including pre-padding)
-    const startIndex = Math.max(0, this.audioBuffer.length - prePadFrames);
-    const segmentData: Float32Array[] = this.audioBuffer.slice(startIndex);
+    // Extract audio data from speechStartBufferIndex to current buffer end
+    // This includes pre-padding and the entire speech segment
+    const segmentData: Float32Array[] = this.audioBuffer.slice(this.speechStartBufferIndex);
 
     // Merge audio data
     const totalLength = segmentData.reduce((sum, chunk) => sum + chunk.length, 0);
@@ -317,10 +373,15 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
       offset += chunk.length;
     }
 
+    // Calculate segment boundaries ensuring no negative values
+    const segmentStart = Math.max(0, this.currentSegmentStart - this.config.preSpeechPadDuration);
+    const segmentEnd = endTime;
+    const segmentDuration = segmentEnd - segmentStart;
+
     return {
-      start: this.currentSegmentStart - this.config.preSpeechPadDuration,
-      end: endTime,
-      duration: endTime - this.currentSegmentStart + this.config.preSpeechPadDuration,
+      start: segmentStart,
+      end: segmentEnd,
+      duration: segmentDuration,
       audioData
     };
   }
@@ -339,24 +400,42 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     this.state = 'non-speech';
     this.consecutiveSilenceMs = 0;
     this.speechStartTime = 0;
+    this.currentSegmentStart = 0;
+    this.speechStartBufferIndex = 0;
     this.positiveSpeechFrames = 0;
     this.audioBuffer = [];
     this.sampleBuffer = new Float32Array(0);
     this.lastProbability = 0;
     this.lastIsSpeech = false;
+    this.lastTimestamp = 0;
     this.resetStates();
+  }
+
+  /**
+   * Flush any pending speech segment
+   * Should be called when audio stream ends to save the last segment
+   */
+  flush(timestamp?: number): void {
+    if (this.state === 'speech') {
+      // Force end the current speech segment
+      // Use provided timestamp, or last processed timestamp, or estimate
+      const endTime = timestamp ?? this.lastTimestamp ?? (this.speechStartTime + 1000);
+      this.endSpeech(endTime, this.lastProbability);
+    }
   }
 
   /**
    * Close and cleanup
    */
   async close(): Promise<void> {
+    // Flush any pending speech segment before closing
+    this.flush();
+
     if (this.session) {
       await this.session.release();
       this.session = null;
     }
-    this.h = null;
-    this.c = null;
+    this.stateTensor = null;
     this.removeAllListeners();
   }
 
