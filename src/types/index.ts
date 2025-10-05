@@ -27,21 +27,15 @@ export interface CaptureOptions {
   frameSize: FrameSize;
 }
 
-/**
- * VAD provider types
- */
-export type VADProvider = 'energy' | 'silero';
 
 /**
- * Silero VAD configuration
+ * Voice Activity Detection configuration (Silero VAD only)
  */
-export interface SileroVADConfig {
+export interface VADConfig {
   /** Enable VAD */
   enabled: boolean;
-  /** VAD provider */
-  provider: 'silero';
 
-  // Silero specific parameters
+  // Silero VAD parameters
   /** Speech detection threshold (0-1, default: 0.3) */
   positiveSpeechThreshold?: number;
   /** Non-speech threshold (0-1, default: 0.25) */
@@ -60,32 +54,12 @@ export interface SileroVADConfig {
   modelVersion?: 'v5' | 'legacy';
 
   // Advanced options
-  /** Return real-time probabilities */
-  returnProbabilities?: boolean;
   /** Audio buffer size */
   bufferSize?: number;
 }
 
-/**
- * Energy-based VAD configuration
- */
-export interface EnergyVADConfig {
-  /** Enable VAD */
-  enabled: boolean;
-  /** VAD provider */
-  provider?: 'energy';
-  /** Energy threshold (0-1, default: 0.5) */
-  threshold?: number;
-  /** Minimum speech duration in ms (default: 100) */
-  minSpeechDuration?: number;
-  /** Minimum silence duration in ms (default: 300) */
-  minSilenceDuration?: number;
-}
-
-/**
- * Voice Activity Detection configuration (union type)
- */
-export type VADConfig = EnergyVADConfig | SileroVADConfig;
+// Keep SileroVADConfig as an alias for backward compatibility
+export type SileroVADConfig = VADConfig;
 
 /**
  * Audio encoding configuration

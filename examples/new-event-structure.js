@@ -15,7 +15,6 @@ async function main() {
     processing: {
       vad: {
         enabled: true,
-        provider: 'silero',  // or 'energy'
         positiveSpeechThreshold: 0.3,
         negativeSpeechThreshold: 0.25,
         silenceDuration: 1400,

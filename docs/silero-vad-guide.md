@@ -10,7 +10,7 @@ Silero VAD is a state-of-the-art neural network-based Voice Activity Detection s
 - **Real-time Speech Probability**: Returns continuous probability values (0-1)
 - **Speech Segmentation**: Automatically detects speech segments with pre-speech padding
 - **Configurable Thresholds**: Fine-tune detection sensitivity for your use case
-- **Dual VAD Support**: Switch between energy-based and Silero VAD
+- **Frame Size Alignment**: Automatically buffers and aligns audio frames for optimal processing
 
 ## Installation
 
@@ -42,7 +42,6 @@ const sdk = new RealtimeAudioSDK({
   processing: {
     vad: {
       enabled: true,
-      provider: 'silero',  // Enable Silero VAD
       modelPath: '/models/silero_vad_v5.onnx'
     }
   }
@@ -56,76 +55,67 @@ await sdk.start();
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
-| `provider` | `'energy' \| 'silero'` | `'energy'` | VAD provider to use |
+| `enabled` | `boolean` | Required | Enable VAD |
 | `positiveSpeechThreshold` | `number` | `0.3` | Threshold for detecting speech start (0-1) |
 | `negativeSpeechThreshold` | `number` | `0.25` | Threshold for detecting speech end (0-1) |
 | `silenceDuration` | `number` | `1400` | Silence duration to end speech segment (ms) |
 | `preSpeechPadDuration` | `number` | `800` | Audio padding before speech start (ms) |
 | `minSpeechDuration` | `number` | `400` | Minimum duration to consider as speech (ms) |
-| `returnProbabilities` | `boolean` | `true` | Return real-time speech probabilities |
 
 ### Event Listeners
 
-#### Speech Start/End Events
+#### Unified Audio Event with VAD
 
 ```typescript
-sdk.on('vad-speech-start', (data) => {
-  console.log('Speech started', {
-    probability: data.probability,
-    timestamp: data.timestamp
-  });
-});
+sdk.on('audio', (event) => {
+  const { audio, metadata, processing } = event;
 
-sdk.on('vad-speech-end', (data) => {
-  console.log('Speech ended', {
-    probability: data.probability,
-    duration: data.segment?.duration
-  });
+  // Check VAD results
+  if (processing.vad?.active) {
+    console.log('Speech:', processing.vad.isSpeech);
+    console.log('Probability:', processing.vad.probability);
+    console.log('Confidence:', processing.vad.confidence);
+  }
+});
+```
+
+#### Speech State Changes
+
+```typescript
+sdk.on('speech-state', (event) => {
+  if (event.type === 'start') {
+    console.log('Speech started', {
+      probability: event.probability,
+      timestamp: event.timestamp
+    });
+  } else {
+    console.log('Speech ended', {
+      probability: event.probability,
+      duration: event.duration
+    });
+  }
 });
 ```
 
 #### Complete Speech Segments
 
 ```typescript
-sdk.on('vad-speech-segment', (segment) => {
+sdk.on('speech-segment', (segment) => {
   console.log('Speech segment detected', {
-    start: segment.start,
-    end: segment.end,
-    duration: segment.duration
+    startTime: segment.startTime,
+    endTime: segment.endTime,
+    duration: segment.duration,
+    avgProbability: segment.avgProbability,
+    confidence: segment.confidence
   });
 
   // Send audio segment for transcription
-  if (segment.audioData) {
-    sendToTranscriptionAPI(segment.audioData);
+  if (segment.audio) {
+    sendToTranscriptionAPI(segment.audio);
   }
 });
 ```
 
-#### Real-time Probability
-
-```typescript
-sdk.on('vad-probability', (probability) => {
-  // Update UI with speech probability (0-1)
-  updateVolumeIndicator(probability);
-});
-```
-
-#### Processed Audio with VAD Info
-
-```typescript
-sdk.on('processed-audio', (data) => {
-  if (data.speechProbability !== undefined) {
-    console.log(`Speech probability: ${(data.speechProbability * 100).toFixed(1)}%`);
-
-    // Custom logic based on confidence levels
-    if (data.speechProbability > 0.8) {
-      // High confidence speech
-    } else if (data.speechProbability > 0.5) {
-      // Medium confidence speech
-    }
-  }
-});
-```
 
 ## Advanced Usage
 
@@ -136,7 +126,6 @@ const sdk = new RealtimeAudioSDK({
   processing: {
     vad: {
       enabled: true,
-      provider: 'silero',
 
       // Fine-tune for your environment
       positiveSpeechThreshold: 0.5,    // More strict speech detection
@@ -146,7 +135,6 @@ const sdk = new RealtimeAudioSDK({
       minSpeechDuration: 300,          // Minimum 300ms speech
 
       // Performance options
-      returnProbabilities: false,       // Disable if not needed
       modelPath: '/models/silero_vad_v5.onnx',
       modelVersion: 'v5'               // or 'legacy' for older model
     }
@@ -154,25 +142,26 @@ const sdk = new RealtimeAudioSDK({
 });
 ```
 
-### Switching VAD Providers at Runtime
+### Updating VAD Configuration at Runtime
 
 ```typescript
-// Start with energy-based VAD
+// Start with default VAD settings
 const sdk = new RealtimeAudioSDK({
   processing: {
     vad: {
       enabled: true,
-      provider: 'energy'
+      modelPath: '/models/silero_vad_v5.onnx'
     }
   }
 });
 
-// Switch to Silero VAD
+// Update VAD thresholds at runtime
 await sdk.updateConfig({
   processing: {
     vad: {
       enabled: true,
-      provider: 'silero',
+      positiveSpeechThreshold: 0.5,
+      negativeSpeechThreshold: 0.2,
       modelPath: '/models/silero_vad_v5.onnx'
     }
   }
@@ -202,8 +191,8 @@ sdk.on('vad-speech-segment', (segment) => {
 
 ### CPU Usage
 
-- **Energy VAD**: Minimal CPU usage (~1-2%)
-- **Silero VAD**: Higher CPU usage (~5-15%) due to neural network inference
+- Neural network inference: ~5-15% CPU usage
+- Varies with frame size and processing frequency
 
 ### Memory Usage
 
@@ -215,17 +204,13 @@ sdk.on('vad-speech-segment', (segment) => {
 - Frame processing: <10ms per frame
 - Total latency: 20-60ms depending on frame size
 
-## Comparison: Energy vs Silero VAD
+### Frame Size Alignment
 
-| Feature | Energy VAD | Silero VAD |
-|---------|------------|------------|
-| **Accuracy** | Good | Excellent |
-| **Noise Handling** | Basic | Advanced |
-| **CPU Usage** | Very Low | Moderate |
-| **Configuration** | Simple | Extensive |
-| **Speech Probability** | No | Yes |
-| **Pre-speech Padding** | No | Yes |
-| **False Positives** | More | Less |
+Silero VAD v5 requires 512 samples (32ms at 16kHz) for optimal processing. The SDK automatically handles buffering when capture frame sizes don't align:
+
+- 20ms capture (320 samples): Buffered to accumulate 512 samples
+- 40ms capture (640 samples): Processed with 512 samples, remainder buffered
+- 60ms capture (960 samples): Processes one 512-sample frame, buffers remainder
 
 ## Troubleshooting
 
@@ -250,8 +235,8 @@ npm run download-model
 If CPU usage is too high:
 
 1. Increase frame size (40ms or 60ms)
-2. Disable `returnProbabilities`
-3. Use energy-based VAD for less critical applications
+2. Reduce processing frequency by adjusting buffer settings
+3. Consider adjusting detection thresholds for your use case
 
 ### Detection Issues
 
@@ -270,10 +255,10 @@ If speech detection is not working well:
 ### Web Application
 
 See `examples/silero-vad-example.html` for a complete web application demonstrating:
-- VAD provider switching
 - Real-time probability visualization
 - Speech segment detection
 - Configuration tuning
+- Frame size alignment handling
 
 ### Node.js Application
 

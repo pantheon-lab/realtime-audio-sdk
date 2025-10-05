@@ -231,7 +231,7 @@ export class RealtimeAudioSDK extends EventEmitter<SDKEvents> {
       this.deviceManager.setCurrentDevice(deviceId);
 
       // Initialize audio processor if needed
-      if (this.config.processing?.vad?.provider === 'silero') {
+      if (this.config.processing?.vad?.enabled) {
         await this.audioProcessor.initialize();
       }
 

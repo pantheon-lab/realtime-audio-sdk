@@ -1,5 +1,8 @@
 # Realtime Audio SDK
 
+![Tests](https://github.com/realtime-ai/realtime-audio-sdk/workflows/Test/badge.svg)
+![Package](https://github.com/realtime-ai/realtime-audio-sdk/workflows/Publish%20Package/badge.svg)
+
 A powerful Web SDK for real-time audio capture, processing, and encoding. Perfect for building voice-based applications like transcription, translation, and AI conversations.
 
 ## Features
@@ -49,16 +52,30 @@ const sdk = new RealtimeAudioSDK({
   },
 });
 
-// Listen for audio data
-sdk.on('audio-data', (chunk) => {
+// Listen for unified audio event (includes all frame data)
+sdk.on('audio', (event) => {
+  const { audio, metadata, processing } = event;
+
   // Send encoded audio to your service
-  websocket.send(chunk.data);
+  if (audio.encoded) {
+    websocket.send(audio.encoded);
+  }
+
+  // Check speech detection
+  if (processing.vad?.active) {
+    console.log('Speech detected:', processing.vad.isSpeech);
+    console.log('Probability:', processing.vad.probability);
+  }
+  console.log('Audio energy:', processing.energy);
 });
 
-// Listen for speech detection
-sdk.on('processed-audio', (data) => {
-  console.log('Speech detected:', data.isSpeech);
-  console.log('Audio energy:', data.energy);
+// Or listen for speech state changes only
+sdk.on('speech-state', (event) => {
+  if (event.type === 'start') {
+    console.log('Speech started');
+  } else {
+    console.log('Speech ended, duration:', event.duration);
+  }
 });
 
 // Start recording
@@ -98,11 +115,15 @@ interface EncodingConfig {
 interface ProcessingConfig {
   vad?: {
     enabled: boolean;
-    threshold?: number;          // Energy threshold 0-1 (default: 0.5)
-    minSpeechDuration?: number;  // Min speech duration in ms (default: 100)
-    minSilenceDuration?: number; // Min silence duration in ms (default: 300)
+
+    // Silero VAD parameters:
+    positiveSpeechThreshold?: number;   // Speech threshold (default: 0.3)
+    negativeSpeechThreshold?: number;   // Non-speech threshold (default: 0.25)
+    silenceDuration?: number;           // Silence duration to end speech in ms (default: 1400)
+    preSpeechPadDuration?: number;      // Pre-speech padding in ms (default: 800)
+    minSpeechDuration?: number;         // Min speech duration in ms (default: 400)
   };
-  normalize?: boolean;           // Enable audio normalization
+  normalize?: boolean;                  // Enable audio normalization
 }
 ```
 
@@ -124,14 +145,17 @@ interface ProcessingConfig {
 
 #### Events
 
-- `audio-data` - Encoded audio chunk available
-- `raw-audio` - Raw audio data (when encoding disabled)
-- `processed-audio` - Processed audio data (after VAD/normalization)
-- `device-changed` - Audio device changed
-- `devices-updated` - Device list updated
-- `device-unplugged` - Current device unplugged
-- `state-changed` - SDK state changed
-- `error` - Error occurred
+**Audio Events:**
+- `audio` - Unified audio event with all frame data (raw, encoded, metadata, processing results)
+- `speech-state` - Speech state changes (start/end events)
+- `speech-segment` - Complete speech segments with audio data
+
+**Device Events:**
+- `device` - All device events (changed/list-updated/unplugged)
+
+**System Events:**
+- `state` - SDK state changes
+- `error` - Errors with context
 
 ## Examples
 
@@ -145,10 +169,20 @@ console.log('Available devices:', devices);
 // Select a specific device
 await sdk.setDevice(devices[0].deviceId);
 
-// Listen for device changes
-sdk.on('device-unplugged', (deviceId) => {
-  console.log('Device unplugged:', deviceId);
-  // SDK will auto-switch if autoSwitchDevice is enabled
+// Listen for device events
+sdk.on('device', (event) => {
+  switch (event.type) {
+    case 'unplugged':
+      console.log('Device unplugged:', event.deviceId);
+      // SDK will auto-switch if autoSwitchDevice is enabled
+      break;
+    case 'changed':
+      console.log('Device changed to:', event.device?.label);
+      break;
+    case 'list-updated':
+      console.log('Device list updated, count:', event.devices?.length);
+      break;
+  }
 });
 ```
 
@@ -159,17 +193,39 @@ const sdk = new RealtimeAudioSDK({
   processing: {
     vad: {
       enabled: true,
-      threshold: 0.02,
-      minSpeechDuration: 100,
-      minSilenceDuration: 300,
+      provider: 'silero',  // Use advanced neural network VAD
+      positiveSpeechThreshold: 0.3,
+      negativeSpeechThreshold: 0.25,
+      silenceDuration: 1400,
+      minSpeechDuration: 400,
     },
   },
 });
 
-sdk.on('processed-audio', (data) => {
-  if (data.isSpeech) {
-    console.log('Speech detected!');
+// Listen for audio frames with VAD results
+sdk.on('audio', (event) => {
+  if (event.processing.vad?.isSpeech) {
+    console.log('Speech detected with probability:', event.processing.vad.probability);
   }
+});
+
+// Or listen for speech state transitions only
+sdk.on('speech-state', (event) => {
+  if (event.type === 'start') {
+    console.log('Speech started at:', event.timestamp);
+  } else {
+    console.log('Speech ended, duration:', event.duration, 'ms');
+  }
+});
+
+// Get complete speech segments for processing
+sdk.on('speech-segment', (segment) => {
+  console.log('Speech segment:', {
+    duration: segment.duration,
+    confidence: segment.confidence,
+    audioSamples: segment.audio.length
+  });
+  // Send segment.audio to transcription service
 });
 ```
 
@@ -182,13 +238,30 @@ const sdk = new RealtimeAudioSDK({
     enabled: true,
     codec: 'opus',
   },
+  processing: {
+    vad: {
+      enabled: true,
+      provider: 'silero',  // Only send speech to transcription
+    },
+  },
 });
 
 // Connect to transcription service
 const ws = new WebSocket('wss://transcription-service.com/ws');
 
-sdk.on('audio-data', (chunk) => {
-  ws.send(chunk.data);
+// Send audio frames to transcription service
+sdk.on('audio', (event) => {
+  // Only send when speech is detected to save bandwidth
+  if (event.audio.encoded && event.processing.vad?.isSpeech) {
+    ws.send(event.audio.encoded);
+  }
+});
+
+// Or send complete speech segments for better accuracy
+sdk.on('speech-segment', async (segment) => {
+  // Encode the segment if needed
+  const encoded = await encodeSegment(segment.audio);
+  ws.send(encoded);
 });
 
 ws.onmessage = (event) => {

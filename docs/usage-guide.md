@@ -26,10 +26,13 @@ import { RealtimeAudioSDK } from '@realtime-ai/audio-sdk';
 // 创建实例（使用默认配置）
 const sdk = new RealtimeAudioSDK();
 
-// 监听音频数据
-sdk.on('audio-data', (chunk) => {
-  console.log('收到音频数据:', chunk.data);
-  console.log('编码类型:', chunk.type); // 'opus' 或 'pcm'
+// 监听统一的音频事件（包含所有帧数据）
+sdk.on('audio', (event) => {
+  const { audio, metadata, processing } = event;
+  console.log('收到音频数据:', audio.encoded || audio.raw);
+  console.log('编码格式:', audio.format); // 'opus' 或 'pcm'
+  console.log('时间戳:', metadata.timestamp);
+  console.log('音频能量:', processing.energy);
 });
 
 // 开始录音
@@ -211,9 +214,9 @@ const sdk = new RealtimeAudioSDK({
   },
 });
 
-// 监听原始音频
-sdk.on('raw-audio', (chunk) => {
-  console.log('PCM 数据:', chunk.data); // Float32Array
+// 监听音频事件，获取原始音频
+sdk.on('audio', (event) => {
+  console.log('PCM 数据:', event.audio.raw); // Float32Array
 });
 ```
 
@@ -241,7 +244,7 @@ await sdk.start(): Promise<void>
 - 请求麦克风权限（如未授权）
 - 初始化编码器
 - 开始音频采集
-- 触发 `state-changed` 事件
+- 触发 `state` 事件
 
 **错误处理**：
 ```typescript
@@ -268,7 +271,7 @@ await sdk.stop(): Promise<void>
 - 停止音频采集
 - 刷新并关闭编码器
 - 释放资源
-- 触发 `state-changed` 事件
+- 触发 `state` 事件
 
 ##### pause()
 
@@ -318,7 +321,7 @@ await sdk.setDevice(devices[0].deviceId);
 
 **注意**：
 - 如果正在录音，会自动重启采集
-- 触发 `device-changed` 事件
+- 触发 `device` 事件 (type: 'changed')
 
 ##### updateConfig()
 
@@ -384,79 +387,95 @@ await sdk.destroy(): Promise<void>
 
 #### 事件
 
-##### audio-data
+##### audio
 
-编码后的音频数据（Opus 或 PCM）
+统一的音频事件，包含所有帧数据
 
 ```typescript
-sdk.on('audio-data', (chunk: EncodedAudioChunk) => {
-  console.log('数据:', chunk.data);        // ArrayBuffer
-  console.log('时间戳:', chunk.timestamp);  // 秒
-  console.log('类型:', chunk.type);        // 'opus' | 'pcm'
+sdk.on('audio', (event: AudioDataEvent) => {
+  const { audio, metadata, processing } = event;
+
+  // 音频数据
+  console.log('原始音频:', audio.raw);           // Float32Array
+  console.log('编码音频:', audio.encoded);       // ArrayBuffer (如果编码启用)
+  console.log('编码格式:', audio.format);        // 'opus' | 'pcm'
+
+  // 元数据
+  console.log('时间戳:', metadata.timestamp);     // 毫秒
+  console.log('帧索引:', metadata.frameIndex);
+  console.log('采样率:', metadata.sampleRate);
+
+  // 处理结果
+  console.log('音频能量:', processing.energy);
+  console.log('是否归一化:', processing.normalized);
+
+  // VAD 结果（如果启用）
+  if (processing.vad?.active) {
+    console.log('是否语音:', processing.vad.isSpeech);
+    console.log('概率:', processing.vad.probability);
+    console.log('置信度:', processing.vad.confidence);
+  }
 });
 ```
 
-##### raw-audio
+##### speech-state
 
-原始音频数据（当 encoding.enabled = false 时）
+语音状态变化事件（开始/结束）
 
 ```typescript
-sdk.on('raw-audio', (chunk: RawAudioChunk) => {
-  console.log('PCM 数据:', chunk.data);         // Float32Array
-  console.log('采样率:', chunk.sampleRate);      // Hz
-  console.log('声道数:', chunk.channelCount);    // 1 或 2
+sdk.on('speech-state', (event: VADStateEvent) => {
+  if (event.type === 'start') {
+    console.log('语音开始:', event.timestamp);
+    console.log('概率:', event.probability);
+  } else {
+    console.log('语音结束:', event.timestamp);
+    console.log('持续时长:', event.duration);
+  }
 });
 ```
 
-##### processed-audio
+##### speech-segment
 
-处理后的音频数据（包含 VAD 信息）
+完整的语音片段（包含前置填充）
 
 ```typescript
-sdk.on('processed-audio', (data: ProcessedAudioData) => {
-  console.log('是否语音:', data.isSpeech);  // boolean (如果启用 VAD)
-  console.log('音频能量:', data.energy);     // number (0-1)
-  console.log('数据:', data.data);          // Float32Array
+sdk.on('speech-segment', (segment: VADSegmentEvent) => {
+  console.log('语音片段音频:', segment.audio);      // Float32Array
+  console.log('开始时间:', segment.startTime);
+  console.log('结束时间:', segment.endTime);
+  console.log('持续时长:', segment.duration);
+  console.log('平均概率:', segment.avgProbability);
+  console.log('置信度:', segment.confidence);
 });
 ```
 
-##### device-changed
+##### device
 
-设备已切换
+设备相关事件（统一）
 
 ```typescript
-sdk.on('device-changed', (device: MediaDeviceInfo) => {
-  console.log('切换到设备:', device.label);
+sdk.on('device', (event: DeviceEvent) => {
+  switch (event.type) {
+    case 'changed':
+      console.log('切换到设备:', event.device?.label);
+      break;
+    case 'list-updated':
+      console.log('设备列表更新:', event.devices?.length, '个设备');
+      break;
+    case 'unplugged':
+      console.log('设备拔出:', event.deviceId);
+      // 如果 autoSwitchDevice = true，会自动切换到默认设备
+      break;
+  }
 });
 ```
 
-##### devices-updated
-
-设备列表已更新（设备插拔）
-
-```typescript
-sdk.on('devices-updated', (devices: MediaDeviceInfo[]) => {
-  console.log('当前设备数量:', devices.length);
-});
-```
-
-##### device-unplugged
-
-当前使用的设备被拔出
-
-```typescript
-sdk.on('device-unplugged', (deviceId: string) => {
-  console.log('设备被拔出:', deviceId);
-  // 如果 autoSwitchDevice = true，会自动切换到默认设备
-});
-```
-
-##### state-changed
+##### state
 
 SDK 状态改变
 
 ```typescript
-sdk.on('state-changed', (state: SDKState) => {
+sdk.on('state', (state: SDKState) => {
   console.log('状态:', state); // 'idle' | 'recording' | 'paused' | 'error'
 });
 ```
@@ -496,15 +515,13 @@ const sdk = new RealtimeAudioSDK({
 const ws = new WebSocket('wss://your-transcription-service.com/ws');
 
 // 发送音频数据
-sdk.on('audio-data', (chunk) => {
-  if (ws.readyState === WebSocket.OPEN) {
-    ws.send(chunk.data);
+sdk.on('audio', (event) => {
+  if (ws.readyState === WebSocket.OPEN && event.audio.encoded) {
+    ws.send(event.audio.encoded);
   }
-});
 
-// 显示 VAD 状态
-sdk.on('processed-audio', (data) => {
-  if (data.isSpeech) {
+  // 显示 VAD 状态
+  if (event.processing.vad?.active && event.processing.vad.isSpeech) {
     console.log('🎤 用户正在说话...');
   }
 });
@@ -532,7 +549,7 @@ const sdk = new RealtimeAudioSDK({
 });
 
 // 发送到翻译服务
-sdk.on('audio-data', async (chunk) => {
+sdk.on('audio', async (chunk) => {
   const response = await fetch('https://translation-api.com/translate', {
     method: 'POST',
     headers: {
@@ -573,14 +590,14 @@ let isSpeaking = false;
 const audioBuffer: ArrayBuffer[] = [];
 
 // 缓存音频数据
-sdk.on('audio-data', (chunk) => {
+sdk.on('audio', (chunk) => {
   if (isSpeaking) {
     audioBuffer.push(chunk.data);
   }
 });
 
 // 监听语音活动
-sdk.on('processed-audio', async (data) => {
+sdk.on('audio', async (data) => {
   if (data.isSpeech && !isSpeaking) {
     // 开始说话
     isSpeaking = true;
@@ -652,7 +669,7 @@ sdk.on('device-unplugged', (deviceId) => {
   // autoSwitchDevice = true 时会自动切换
 });
 
-sdk.on('device-changed', (device) => {
+sdk.on('device', (device) => {
   console.log('当前设备:', device.label);
 });
 
@@ -693,14 +710,14 @@ if (audioContext.audioWorklet) {
 
 ```typescript
 // ✅ 正确
-sdk.on('audio-data', (chunk) => {
+sdk.on('audio', (chunk) => {
   console.log('收到数据');
 });
 await sdk.start();
 
 // ❌ 错误（监听器注册太晚）
 await sdk.start();
-sdk.on('audio-data', (chunk) => {
+sdk.on('audio', (chunk) => {
   console.log('收到数据'); // 可能错过数据
 });
 ```
@@ -763,11 +780,11 @@ const sdk = new RealtimeAudioSDK({
 // 方案 1: 仅在检测到语音时发送
 let shouldSend = false;
 
-sdk.on('processed-audio', (data) => {
+sdk.on('audio', (data) => {
   shouldSend = data.isSpeech ?? false;
 });
 
-sdk.on('audio-data', (chunk) => {
+sdk.on('audio', (chunk) => {
   if (shouldSend) {
     websocket.send(chunk.data);
   }
@@ -858,7 +875,7 @@ sdk.on('error', async (error) => {
 // 使用 Web Worker 处理音频数据
 const worker = new Worker('audio-processor.worker.js');
 
-sdk.on('audio-data', (chunk) => {
+sdk.on('audio', (chunk) => {
   // 转移所有权到 Worker，避免拷贝
   worker.postMessage({ chunk }, [chunk.data]);
 });
@@ -891,7 +908,7 @@ const config: SDKConfig = {
 };
 
 // 类型安全的事件处理
-sdk.on('audio-data', (chunk: EncodedAudioChunk) => {
+sdk.on('audio', (chunk: EncodedAudioChunk) => {
   // chunk 有完整的类型提示
   console.log(chunk.timestamp);
 });
@@ -901,15 +918,15 @@ sdk.on('audio-data', (chunk: EncodedAudioChunk) => {
 
 ```typescript
 // 添加详细日志
-sdk.on('state-changed', (state) => {
+sdk.on('state', (state) => {
   console.log(`[${new Date().toISOString()}] 状态: ${state}`);
 });
 
-sdk.on('device-changed', (device) => {
+sdk.on('device', (device) => {
   console.log(`[${new Date().toISOString()}] 设备: ${device.label}`);
 });
 
-sdk.on('processed-audio', (data) => {
+sdk.on('audio', (data) => {
   console.log(`[${new Date().toISOString()}] 能量: ${data.energy.toFixed(3)}, 语音: ${data.isSpeech}`);
 });
 
@@ -917,7 +934,7 @@ sdk.on('processed-audio', (data) => {
 let chunkCount = 0;
 let startTime = Date.now();
 
-sdk.on('audio-data', (chunk) => {
+sdk.on('audio', (chunk) => {
   chunkCount++;
   if (chunkCount % 100 === 0) {
     const elapsed = (Date.now() - startTime) / 1000;

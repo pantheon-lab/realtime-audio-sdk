@@ -26,8 +26,7 @@
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "test:vad": "node tests/run-vad-test.js",
-    "test:vad:accuracy": "vitest run tests/vad-accuracy.test.ts --reporter=verbose",
-    "download-model": "node scripts/download-silero-model.js"
+    "test:vad:accuracy": "vitest run tests/vad-accuracy.test.ts --reporter=verbose"
   },
   "keywords": [
     "audio",
@@ -42,6 +41,17 @@
   ],
   "author": "realtime-ai",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/realtime-ai/realtime-audio-sdk.git"
+  },
+  "bugs": {
+    "url": "https://github.com/realtime-ai/realtime-audio-sdk/issues"
+  },
+  "homepage": "https://github.com/realtime-ai/realtime-audio-sdk#readme",
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com"
+  },
   "devDependencies": {
     "@types/node": "^20.11.5",
     "@typescript-eslint/eslint-plugin": "^6.19.1",

@@ -1,7 +1,6 @@
 import type {
   AudioProcessorResult,
   ProcessingConfig,
-  SileroVADConfig,
   VADStateEvent,
   VADSegmentEvent
 } from '@/types';
@@ -19,15 +18,6 @@ interface AudioProcessorEvents {
 export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
   private config: ProcessingConfig;
   private sileroVAD?: SileroVAD;
-  private vadState: {
-    isSpeech: boolean;
-    speechStartTime: number;
-    silenceStartTime: number;
-  } = {
-    isSpeech: false,
-    speechStartTime: 0,
-    silenceStartTime: 0,
-  };
 
   constructor(config: ProcessingConfig = {}) {
     super();
@@ -39,42 +29,67 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
    */
   async initialize(): Promise<void> {
     const vadConfig = this.config.vad;
-    if (vadConfig?.enabled && vadConfig.provider === 'silero') {
-      this.sileroVAD = new SileroVAD(vadConfig as SileroVADConfig);
+    if (vadConfig?.enabled) {
+      // Always use Silero VAD when VAD is enabled
+      this.sileroVAD = new SileroVAD(vadConfig);
       await this.sileroVAD.initialize();
 
       // Forward Silero VAD events with new format
       this.sileroVAD.on('speech-start', (data) => {
-        const event: VADStateEvent = {
-          type: 'start',
-          timestamp: data.timestamp,
-          probability: data.probability
-        };
-        this.emit('speech-state', event);
+        this.emitVADEvent('start', data);
       });
 
       this.sileroVAD.on('speech-end', (data) => {
-        const event: VADStateEvent = {
-          type: 'end',
-          timestamp: data.timestamp,
-          probability: data.probability,
-          duration: data.segment ? data.segment.duration : undefined
-        };
-        this.emit('speech-state', event);
-      });
-
-      this.sileroVAD.on('speech-segment', (segment) => {
-        const event: VADSegmentEvent = {
-          audio: segment.audioData || new Float32Array(0),
-          startTime: segment.start,
-          endTime: segment.end,
-          duration: segment.duration,
-          avgProbability: 0.5, // Will be calculated by SileroVAD
-          confidence: 0.8 // Will be calculated by SileroVAD
-        };
-        this.emit('speech-segment', event);
+        this.emitVADEvent('end', data);
       });
     }
+  }
+
+  /**
+   * Helper method to emit VAD events
+   */
+  private emitVADEvent(type: 'start' | 'end', data: {
+    isSpeech: boolean;
+    probability: number;
+    timestamp: number;
+    segment?: {
+      start: number;
+      end: number;
+      duration: number;
+      audioData?: Float32Array;
+    };
+  }): void {
+    const event: VADStateEvent = {
+      type,
+      timestamp: data.timestamp,
+      probability: data.probability,
+      duration: type === 'end' && data.segment ? data.segment.duration : undefined
+    };
+    this.emit('speech-state', event);
+
+    // Emit speech-segment event if segment data is available
+    if (type === 'end' && data.segment) {
+      const segmentEvent: VADSegmentEvent = {
+        audio: data.segment.audioData || new Float32Array(0),
+        startTime: data.segment.start,
+        endTime: data.segment.end,
+        duration: data.segment.duration,
+        avgProbability: data.probability,
+        confidence: this.calculateConfidence(data.probability)
+      };
+      this.emit('speech-segment', segmentEvent);
+    }
+  }
+
+  /**
+   * Calculate confidence from probability
+   */
+  private calculateConfidence(probability: number): number {
+    // More gradual confidence calculation
+    if (probability > 0.9) return 1.0;
+    if (probability > 0.7) return 0.9;
+    if (probability > 0.5) return 0.8;
+    return probability;
   }
 
   /**
@@ -94,22 +109,13 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
     // Voice Activity Detection
     let vadResult: { isSpeech: boolean; probability: number } | undefined;
 
-    if (this.config.vad?.enabled) {
-      if (this.sileroVAD) {
-        // Use Silero VAD
-        const result = await this.sileroVAD.process(processedData, timestamp);
-        vadResult = {
-          isSpeech: result.isSpeech,
-          probability: result.probability
-        };
-      } else {
-        // Use energy-based VAD
-        const isSpeech = this.detectVoiceActivity(energy, timestamp);
-        vadResult = {
-          isSpeech,
-          probability: isSpeech ? Math.min(energy * 2, 1.0) : energy // Estimate probability from energy
-        };
-      }
+    if (this.config.vad?.enabled && this.sileroVAD) {
+      // Use Silero VAD (only VAD option now)
+      const result = await this.sileroVAD.process(processedData, timestamp);
+      vadResult = {
+        isSpeech: result.isSpeech,
+        probability: result.probability
+      };
     }
 
     return {
@@ -146,49 +152,6 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
     return Math.sqrt(sum / data.length);
   }
 
-  /**
-   * Detect voice activity using energy-based VAD
-   */
-  private detectVoiceActivity(energy: number, timestamp: number): boolean {
-    // Energy VAD uses simple threshold
-    const threshold = 0.02; // Default energy threshold
-    const minSpeechDuration = 100;
-    const minSilenceDuration = 300;
-
-    const isSpeechNow = energy > threshold;
-
-    if (isSpeechNow && !this.vadState.isSpeech) {
-      // Potential speech start
-      if (this.vadState.speechStartTime === 0) {
-        this.vadState.speechStartTime = timestamp;
-      }
-
-      // Check if speech has been sustained long enough
-      if (timestamp - this.vadState.speechStartTime >= minSpeechDuration) {
-        this.vadState.isSpeech = true;
-        this.vadState.silenceStartTime = 0;
-      }
-    } else if (!isSpeechNow && this.vadState.isSpeech) {
-      // Potential speech end
-      if (this.vadState.silenceStartTime === 0) {
-        this.vadState.silenceStartTime = timestamp;
-      }
-
-      // Check if silence has been sustained long enough
-      if (timestamp - this.vadState.silenceStartTime >= minSilenceDuration) {
-        this.vadState.isSpeech = false;
-        this.vadState.speechStartTime = 0;
-      }
-    } else if (isSpeechNow && this.vadState.isSpeech) {
-      // Reset silence timer if speech continues
-      this.vadState.silenceStartTime = 0;
-    } else if (!isSpeechNow && !this.vadState.isSpeech) {
-      // Reset speech timer if silence continues
-      this.vadState.speechStartTime = 0;
-    }
-
-    return this.vadState.isSpeech;
-  }
 
   /**
    * Update configuration
@@ -196,13 +159,9 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
   updateConfig(config: Partial<ProcessingConfig>): void {
     this.config = { ...this.config, ...config };
 
-    // Reset VAD state if VAD config changed
-    if (config.vad) {
-      this.vadState = {
-        isSpeech: false,
-        speechStartTime: 0,
-        silenceStartTime: 0,
-      };
+    // Reinitialize Silero VAD if config changed
+    if (config.vad && this.sileroVAD) {
+      this.sileroVAD.updateConfig(config.vad);
     }
   }
 
@@ -210,12 +169,6 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
    * Reset VAD state
    */
   resetVAD(): void {
-    this.vadState = {
-      isSpeech: false,
-      speechStartTime: 0,
-      silenceStartTime: 0,
-    };
-
     if (this.sileroVAD) {
       this.sileroVAD.reset();
     }

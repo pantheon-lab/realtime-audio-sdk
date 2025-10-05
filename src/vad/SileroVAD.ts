@@ -17,8 +17,6 @@ interface VADEventData {
 interface SileroVADEvents {
   'speech-start': (data: VADEventData) => void;
   'speech-end': (data: VADEventData) => void;
-  'speech-segment': (segment: { start: number; end: number; duration: number; audioData?: Float32Array }) => void;
-  'probability': (prob: number) => void;
 }
 
 /**
@@ -41,6 +39,11 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
   private currentSegmentStart: number = 0;
   private frameSize: number = 512; // v5 model default
 
+  // Sample buffer for handling misaligned chunks
+  private sampleBuffer: Float32Array = new Float32Array(0);
+  private lastProbability: number = 0;
+  private lastIsSpeech: boolean = false;
+
   // Probability tracking
   private positiveSpeechFrames: number = 0;
 
@@ -51,7 +54,6 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     this.config = {
       ...config,
       enabled: config.enabled ?? true,
-      provider: config.provider ?? 'silero',
       positiveSpeechThreshold: config.positiveSpeechThreshold ?? 0.3,
       negativeSpeechThreshold: config.negativeSpeechThreshold ?? 0.25,
       silenceDuration: config.silenceDuration ?? 1400,
@@ -59,7 +61,6 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
       minSpeechDuration: config.minSpeechDuration ?? 400,
       modelPath: config.modelPath ?? '/models/silero_vad_v5.onnx',
       modelVersion: config.modelVersion ?? 'v5',
-      returnProbabilities: config.returnProbabilities ?? true,
       bufferSize: config.bufferSize ?? (16000 * 2), // 2 seconds buffer
     } as Required<SileroVADConfig>;
 
@@ -122,7 +123,7 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     // Ensure audio is at 16kHz (assuming input is already 16kHz)
     // If resampling is needed, it should be added here
 
-    // Add to buffer (for pre-speech padding)
+    // Add to speech segment buffer (for pre-speech padding)
     this.audioBuffer.push(new Float32Array(audioData));
 
     // Limit buffer size
@@ -131,31 +132,65 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
       this.audioBuffer.shift();
     }
 
-    // Process audio in frames
+    // Concatenate new audio with sample buffer
+    const totalSamples = this.sampleBuffer.length + audioData.length;
+    const combinedAudio = new Float32Array(totalSamples);
+    combinedAudio.set(this.sampleBuffer, 0);
+    combinedAudio.set(audioData, this.sampleBuffer.length);
+
+    // Process all complete 512-sample frames
     let offset = 0;
-    let avgProbability = 0;
+    let totalProbability = 0;
     let frameCount = 0;
 
-    while (offset + this.frameSize <= audioData.length) {
-      const frame = audioData.slice(offset, offset + this.frameSize);
+    while (offset + this.frameSize <= combinedAudio.length) {
+      const frame = combinedAudio.slice(offset, offset + this.frameSize);
       const probability = await this.processFrame(frame, timestamp);
 
-      avgProbability += probability;
+      totalProbability += probability;
       frameCount++;
+      this.lastProbability = probability;
 
-      // Emit real-time probability if configured
-      if (this.config.returnProbabilities) {
-        this.emit('probability', probability);
-      }
+      // Store probability for return value
+      // (Real-time probability is now available via the main audio event)
 
       offset += this.frameSize;
     }
 
-    // Calculate average probability for this chunk
-    const finalProbability = frameCount > 0 ? avgProbability / frameCount : 0;
+    // Store remaining samples for next call
+    if (offset < combinedAudio.length) {
+      this.sampleBuffer = combinedAudio.slice(offset);
+    } else {
+      this.sampleBuffer = new Float32Array(0);
+    }
 
-    // Update VAD state machine
-    const isSpeech = this.updateVADState(finalProbability, timestamp);
+    // Calculate result based on processed frames
+    let finalProbability: number;
+    let isSpeech: boolean;
+
+    if (frameCount > 0) {
+      // We processed at least one frame
+      finalProbability = totalProbability / frameCount;
+      isSpeech = this.updateVADState(finalProbability, timestamp);
+      this.lastIsSpeech = isSpeech;
+    } else {
+      // No complete frame available, use last known state
+      finalProbability = this.lastProbability;
+      isSpeech = this.lastIsSpeech;
+
+      // Still update timing for silence duration tracking
+      if (!isSpeech && this.state === 'speech') {
+        const frameTimeMs = (audioData.length / 16000) * 1000;
+        this.consecutiveSilenceMs += frameTimeMs;
+
+        // Check if we should end speech based on silence duration
+        if (this.consecutiveSilenceMs >= this.config.silenceDuration) {
+          this.endSpeech(timestamp, finalProbability);
+          isSpeech = false;
+          this.lastIsSpeech = false;
+        }
+      }
+    }
 
     return {
       isSpeech,
@@ -225,28 +260,7 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
 
         // Check if speech should end
         if (this.consecutiveSilenceMs >= this.config.silenceDuration) {
-          // Check minimum speech duration
-          const speechDuration = timestamp - this.speechStartTime;
-
-          if (speechDuration >= this.config.minSpeechDuration) {
-            // Valid speech segment, create segment with pre-padding
-            const segment = this.createSpeechSegment(timestamp);
-
-            // Emit speech end event
-            const eventData: VADEventData = {
-              isSpeech: false,
-              probability,
-              timestamp,
-              segment
-            };
-            this.emit('speech-end', eventData);
-            this.emit('speech-segment', segment);
-          }
-
-          // Reset state
-          this.state = 'non-speech';
-          this.consecutiveSilenceMs = 0;
-          this.positiveSpeechFrames = 0;
+          this.endSpeech(timestamp, probability);
         }
       } else if (probability > this.config.positiveSpeechThreshold) {
         // Speech continues, reset silence timer
@@ -257,6 +271,29 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     }
 
     return this.state === 'speech';
+  }
+
+  /**
+   * End speech and emit events
+   */
+  private endSpeech(timestamp: number, probability: number): void {
+    const speechDuration = timestamp - this.speechStartTime;
+    if (speechDuration >= this.config.minSpeechDuration) {
+      // Valid speech segment
+      const segment = this.createSpeechSegment(timestamp);
+      const eventData: VADEventData = {
+        isSpeech: false,
+        probability,
+        timestamp,
+        segment
+      };
+      this.emit('speech-end', eventData);
+    }
+
+    // Reset state
+    this.state = 'non-speech';
+    this.consecutiveSilenceMs = 0;
+    this.positiveSpeechFrames = 0;
   }
 
   /**
@@ -289,6 +326,13 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
   }
 
   /**
+   * Update configuration
+   */
+  updateConfig(config: Partial<SileroVADConfig>): void {
+    this.config = { ...this.config, ...config };
+  }
+
+  /**
    * Reset VAD state
    */
   reset(): void {
@@ -297,6 +341,9 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     this.speechStartTime = 0;
     this.positiveSpeechFrames = 0;
     this.audioBuffer = [];
+    this.sampleBuffer = new Float32Array(0);
+    this.lastProbability = 0;
+    this.lastIsSpeech = false;
     this.resetStates();
   }
 

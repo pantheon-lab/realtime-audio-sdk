@@ -15,9 +15,8 @@ async function main() {
     processing: {
       vad: {
         enabled: true,
-        provider: 'silero',  // Use Silero VAD instead of energy-based
 
-        // Silero VAD specific parameters
+        // Silero VAD parameters
         positiveSpeechThreshold: 0.3,     // Speech detection threshold
         negativeSpeechThreshold: 0.25,    // Non-speech threshold
         silenceDuration: 1400,             // Silence duration to end speech (ms)
@@ -25,7 +24,6 @@ async function main() {
         minSpeechDuration: 400,           // Minimum speech duration (ms)
 
         // Advanced options
-        returnProbabilities: true,         // Get real-time speech probabilities
         modelPath: '/models/silero_vad_v5.onnx',  // Path to ONNX model
         modelVersion: 'v5',               // Model version
       }
@@ -169,25 +167,11 @@ async function main() {
 async function compareVADProviders() {
   console.log('\n📊 Comparing VAD Providers:\n');
 
-  // Energy-based VAD
-  const energySDK = new RealtimeAudioSDK({
-    processing: {
-      vad: {
-        enabled: true,
-        provider: 'energy',  // Default energy-based VAD
-        threshold: 0.5,
-        minSpeechDuration: 100,
-        minSilenceDuration: 300
-      }
-    }
-  });
-
-  // Silero VAD
+  // Silero VAD Configuration
   const sileroSDK = new RealtimeAudioSDK({
     processing: {
       vad: {
         enabled: true,
-        provider: 'silero',
         positiveSpeechThreshold: 0.3,
         negativeSpeechThreshold: 0.25,
         silenceDuration: 1400,
@@ -197,17 +181,12 @@ async function compareVADProviders() {
     }
   });
 
-  console.log('Energy-based VAD:');
-  console.log('  • Simple energy/amplitude detection');
-  console.log('  • Low CPU usage');
-  console.log('  • Good for basic speech detection');
-  console.log('  • May trigger on loud noises\n');
-
-  console.log('Silero VAD:');
+  console.log('Silero VAD Features:');
   console.log('  • Neural network-based detection');
   console.log('  • More accurate speech/noise discrimination');
   console.log('  • Returns speech probability (0-1)');
   console.log('  • Better handling of background noise');
+  console.log('  • Automatic frame size alignment');
   console.log('  • Includes pre-speech padding for context');
   console.log('  • Higher CPU usage (ONNX inference)\n');
 

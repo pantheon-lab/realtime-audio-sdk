@@ -1,0 +1,27 @@
+# Source files
+src/
+tests/
+examples/
+docs/
+
+# Config files
+.eslintrc.*
+.gitignore
+tsconfig.json
+vite.config.ts
+vitest.config.ts
+
+# GitHub specific
+.github/
+CLAUDE.md
+DESIGN.md
+
+# Development files
+*.log
+*.tgz
+.DS_Store
+coverage/
+node_modules/
+
+# Keep only dist folder and essential files
+# package.json, README.md, LICENSE, and CHANGELOG.md are included by default
