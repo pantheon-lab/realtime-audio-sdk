@@ -37,7 +37,6 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
   private audioBuffer: Float32Array[] = [];
   private speechStartTime: number = 0;
   private consecutiveSilenceMs: number = 0;
-  private currentSegmentStart: number = 0;
   private speechStartBufferIndex: number = 0; // Track buffer index when speech starts
   private frameSize: number = 512; // v5 model default
 
@@ -267,7 +266,6 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
         console.log(`[VAD] Speech START - probability: ${probability.toFixed(3)}, threshold: ${this.config.positiveSpeechThreshold}, timestamp: ${timestamp.toFixed(3)}s`);
         this.state = 'speech';
         this.speechStartTime = timestamp;
-        this.currentSegmentStart = timestamp;
         this.consecutiveSilenceMs = 0;
         this.positiveSpeechFrames = 1;
 
@@ -410,7 +408,6 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     this.state = 'non-speech';
     this.consecutiveSilenceMs = 0;
     this.speechStartTime = 0;
-    this.currentSegmentStart = 0;
     this.speechStartBufferIndex = 0;
     this.positiveSpeechFrames = 0;
     this.audioBuffer = [];
