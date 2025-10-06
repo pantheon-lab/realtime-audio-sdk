@@ -25,7 +25,8 @@
     "type-check": "tsc --noEmit",
     "lint": "eslint src --ext .ts",
     "lint:fix": "eslint src --ext .ts --fix",
-    "test": "vitest",
+    "test": "vitest --run",
+    "test:watch": "vitest",
     "test:ui": "vitest --ui",
     "test:coverage": "vitest --coverage",
     "test:vad": "node tests/run-vad-test.js"
@@ -61,7 +62,6 @@
     "eslint": "^8.56.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.3",
-    "onnxruntime-node": "^1.20.1",
     "terser": "^5.44.0",
     "typescript": "^5.3.3",
     "vite": "^5.0.12",

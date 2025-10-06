@@ -1,14 +1,9 @@
 import { beforeAll, afterAll } from 'vitest';
-import * as ort from 'onnxruntime-node';
 
 // Setup test environment
 beforeAll(async () => {
   // Set test environment
   process.env.NODE_ENV = 'test';
-
-  // Configure ONNX Runtime for Node.js
-  // Use onnxruntime-node for better compatibility in Node.js environment
-  (global as any).ort = ort;
 
   // Mock performance.now if not available
   if (typeof performance === 'undefined') {

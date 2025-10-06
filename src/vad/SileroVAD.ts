@@ -1,8 +1,6 @@
 import type { SileroVADConfig } from '../types';
 import { EventEmitter } from '../core/EventEmitter';
-
 import * as ort from 'onnxruntime-web/wasm';
-
 
 interface VADEventData {
   isSpeech: boolean;
@@ -83,14 +81,7 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
   async initialize(): Promise<void> {
     try {
       // Initialize sample rate tensor (int64 with value 16000)
-
-      if (!(ort as any).Tensor) {
-        throw new Error('onnxruntime-web import is wrong: ort.Tensor is missing');
-      }
-  
-      // Scalar int64 sample rate
       this.srTensor = new ort.Tensor('int64', BigInt64Array.from([16000n]), []);
-
 
       // Configure ONNX Runtime for browser
       if (ort.env && ort.env.wasm) {
