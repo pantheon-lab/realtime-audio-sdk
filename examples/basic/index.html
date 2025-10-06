@@ -86,7 +86,7 @@
       </select>
     </label>
     <label>
-      <input type="checkbox" id="vadEnabled">
+      <input type="checkbox" id="vadEnabled" checked>
       Enable VAD
     </label>
     <label>
@@ -152,6 +152,23 @@
 
     // Initialize SDK
     function initSDK() {
+      const processingConfig = {
+        normalize: normalizeCheckbox.checked,
+      };
+
+      // Only add VAD config if enabled
+      if (vadCheckbox.checked) {
+        processingConfig.vad = {
+          enabled: true,
+          positiveSpeechThreshold: 0.6,  // Higher threshold to reduce false positives
+          negativeSpeechThreshold: 0.45, // Higher threshold for ending speech
+          silenceDuration: 800,           // Shorter silence duration (800ms)
+          preSpeechPadDuration: 300,
+          minSpeechDuration: 100,         // Lower min duration to catch short utterances
+          modelPath: '/public/models/silero_vad_v5.onnx',
+        };
+      }
+
       const config = {
         frameSize: parseInt(frameSizeSelect.value),
         encoding: {
@@ -159,13 +176,7 @@
           codec: 'opus',
           bitrate: 16000,
         },
-        processing: {
-          vad: vadCheckbox.checked ? {
-            enabled: true,
-            threshold: 0.02,
-          } : undefined,
-          normalize: normalizeCheckbox.checked,
-        },
+        processing: processingConfig,
         autoSwitchDevice: true,
       };
 
@@ -198,6 +209,21 @@
         statusEl.textContent = state.charAt(0).toUpperCase() + state.slice(1);
         updateButtonStates(state);
         log(`State changed: ${state}`);
+      });
+
+      // VAD speech state events
+      sdk.on('speech-state', (event) => {
+        console.log('Speech state event:', event);
+        if (event.type === 'start') {
+          log(`Speech started (probability: ${event.probability.toFixed(2)})`);
+        } else {
+          log(`Speech ended (duration: ${event.duration}ms)`);
+        }
+      });
+
+      // VAD speech segment events
+      sdk.on('speech-segment', (event) => {
+        log(`Speech segment: ${event.duration}ms, confidence: ${event.confidence.toFixed(2)}, samples: ${event.audio.length}`);
       });
 
       // Device events (unified)
@@ -241,7 +267,11 @@
     // Button handlers
     startBtn.addEventListener('click', async () => {
       try {
-        if (!sdk) initSDK();
+        // Recreate SDK with current config (to respect checkbox states)
+        if (sdk) {
+          await sdk.destroy();
+        }
+        initSDK();
 
         if (deviceSelect.value) {
           await sdk.setDevice(deviceSelect.value);

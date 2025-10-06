@@ -41,7 +41,10 @@ export class RealtimeAudioSDK extends EventEmitter<SDKEvents> {
         bitrate: config.encoding?.bitrate || 16000,
         complexity: config.encoding?.complexity || 5,
       },
-      processing: config.processing || {},
+      processing: {
+        vad: config.processing?.vad,
+        normalize: config.processing?.normalize,
+      },
       autoSwitchDevice: config.autoSwitchDevice ?? true,
     };
 
@@ -231,8 +234,12 @@ export class RealtimeAudioSDK extends EventEmitter<SDKEvents> {
       this.deviceManager.setCurrentDevice(deviceId);
 
       // Initialize audio processor if needed
+      console.log('Checking VAD initialization - config:', this.config.processing);
       if (this.config.processing?.vad?.enabled) {
+        console.log('VAD is enabled, initializing AudioProcessor...');
         await this.audioProcessor.initialize();
+      } else {
+        console.log('VAD not enabled in config');
       }
 
       // Initialize encoder if needed

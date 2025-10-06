@@ -1,15 +1,17 @@
 import { defineConfig } from 'vite';
 import { resolve } from 'path';
 import dts from 'vite-plugin-dts';
+import { copyFileSync, mkdirSync, existsSync } from 'fs';
 
-export default defineConfig({
-  plugins: [
+export default defineConfig(({ command, mode }) => ({
+  plugins: command === 'build' ? [
     dts({
       insertTypesEntry: true,
       rollupTypes: true,
     }),
-  ],
-  build: {
+  ] : [],
+  root: (command === 'serve' && mode !== 'test') ? './examples' : './',
+  build: command === 'build' ? {
     lib: {
       entry: resolve(__dirname, 'src/index.ts'),
       name: 'RealtimeAudioSDK',
@@ -29,12 +31,21 @@ export default defineConfig({
         drop_console: false,
       },
     },
-  },
+  } : undefined,
   resolve: {
     alias: {
       '@': resolve(__dirname, './src'),
     },
   },
+  optimizeDeps: {
+    exclude: ['onnxruntime-web'],
+  },
+  server: {
+    fs: {
+      allow: ['..', './node_modules'],
+    },
+  },
+  assetsInclude: ['**/*.wasm', '**/*.mjs'],
   test: {
     globals: true,
     environment: 'node',
@@ -46,4 +57,4 @@ export default defineConfig({
       exclude: ['tests/**', 'examples/**', 'scripts/**']
     }
   },
-});
+}));

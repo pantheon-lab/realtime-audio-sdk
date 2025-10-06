@@ -17,7 +17,9 @@
     "dist"
   ],
   "scripts": {
-    "dev": "vite",
+    "prepare": "npm run copy:wasm",
+    "copy:wasm": "mkdir -p examples/public && cp node_modules/onnxruntime-web/dist/*.wasm node_modules/onnxruntime-web/dist/*.mjs examples/public/ 2>/dev/null || true",
+    "dev": "npm run copy:wasm && vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
     "type-check": "tsc --noEmit",
@@ -67,6 +69,6 @@
     "node": ">=18.0.0"
   },
   "dependencies": {
-    "onnxruntime-web": "^1.23.0"
+    "onnxruntime-web": "^1.17.1"
   }
 }

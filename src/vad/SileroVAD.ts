@@ -1,8 +1,8 @@
 import type { SileroVADConfig } from '../types';
 import { EventEmitter } from '../core/EventEmitter';
 
-// ONNX Runtime type
-type OrtType = typeof import('onnxruntime-web') | typeof import('onnxruntime-node');
+import * as ort from 'onnxruntime-web/wasm';
+
 
 interface VADEventData {
   isSpeech: boolean;
@@ -25,7 +25,6 @@ interface SileroVADEvents {
  * Silero VAD implementation using ONNX Runtime
  */
 export class SileroVAD extends EventEmitter<SileroVADEvents> {
-  private ort: OrtType | null = null;
   private session: any | null = null;
   private config: Required<SileroVADConfig>;
   private state: 'non-speech' | 'speech' = 'non-speech';
@@ -84,38 +83,30 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
    */
   async initialize(): Promise<void> {
     try {
-      // Load ONNX Runtime based on environment
-      if (typeof process !== 'undefined' && process.versions && process.versions.node) {
-        // Node.js environment
-        this.ort = (globalThis as any).ort || (await import('onnxruntime-node')).default;
-      } else {
-        // Browser environment
-        this.ort = (await import('onnxruntime-web'));
-      }
-
-      if (!this.ort) {
-        throw new Error('Failed to load ONNX Runtime');
-      }
-
       // Initialize sample rate tensor (int64 with value 16000)
-      // @ts-ignore - BigInt is needed for int64
-      this.srTensor = new this.ort.Tensor('int64', [16000n]);
 
-      // Determine execution providers based on environment
-      const isNode = typeof process !== 'undefined' && process.versions && process.versions.node;
-      const executionProviders = isNode ? ['cpu'] : ['wasm'];
+      if (!(ort as any).Tensor) {
+        throw new Error('onnxruntime-web import is wrong: ort.Tensor is missing');
+      }
+  
+      // Scalar int64 sample rate
+      this.srTensor = new ort.Tensor('int64', BigInt64Array.from([16000n]), []);
+
 
       // Configure ONNX Runtime for browser
-      if (this.ort.env && this.ort.env.wasm && !isNode) {
-        this.ort.env.wasm.wasmPaths = '/';
+      if (ort.env && ort.env.wasm) {
+        // Use single thread for better compatibility
+        ort.env.wasm.numThreads = 1;
+        // Set WASM paths to the public directory where files are copied
+        ort.env.wasm.wasmPaths = '/public/';
       }
 
       // Load ONNX model
       console.log('Loading VAD model...');
-      this.session = await this.ort.InferenceSession.create(
+      this.session = await ort.InferenceSession.create(
         this.config.modelPath,
         {
-          executionProviders,
+          executionProviders: ['wasm'],
           graphOptimizationLevel: 'all'
         }
       );
@@ -134,13 +125,9 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
    * Reset LSTM hidden states
    */
   private resetStates(): void {
-    if (!this.ort) {
-      throw new Error('ONNX Runtime not loaded. Call initialize() first.');
-    }
-
     // Silero v5 uses a combined state tensor [2, 1, 128]
     const zeroes = Array(2 * 128).fill(0);
-    this.stateTensor = new this.ort.Tensor('float32', zeroes, [2, 1, 128]);
+    this.stateTensor = new ort.Tensor('float32', zeroes, [2, 1, 128]);
   }
 
   /**
@@ -248,7 +235,7 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     }
 
     // Prepare input tensor
-    const inputTensor = new this.ort!.Tensor('float32', frame, [1, frame.length]);
+    const inputTensor = new ort.Tensor('float32', frame, [1, frame.length]);
 
     // Prepare feeds for Silero v5 model
     const inputs = {
@@ -277,6 +264,7 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     if (this.state === 'non-speech') {
       // Check for speech start
       if (probability > this.config.positiveSpeechThreshold) {
+        console.log(`[VAD] Speech START - probability: ${probability.toFixed(3)}, threshold: ${this.config.positiveSpeechThreshold}, timestamp: ${timestamp.toFixed(3)}s`);
         this.state = 'speech';
         this.speechStartTime = timestamp;
         this.currentSegmentStart = timestamp;
@@ -306,17 +294,24 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
         // Accumulate silence time
         const frameTimeMs = (this.frameSize / 16000) * 1000;
         this.consecutiveSilenceMs += frameTimeMs;
+        console.log(`[VAD] Silence accumulating: ${this.consecutiveSilenceMs.toFixed(0)}ms / ${this.config.silenceDuration}ms (prob: ${probability.toFixed(3)})`);
 
         // Check if speech should end
         if (this.consecutiveSilenceMs >= this.config.silenceDuration) {
+          console.log(`[VAD] Speech END - silence duration reached`);
           this.endSpeech(timestamp, probability);
         }
       } else if (probability > this.config.positiveSpeechThreshold) {
         // Speech continues, reset silence timer
+        if (this.consecutiveSilenceMs > 0) {
+          console.log(`[VAD] Speech continues, resetting silence timer (was ${this.consecutiveSilenceMs.toFixed(0)}ms)`);
+        }
         this.consecutiveSilenceMs = 0;
         this.positiveSpeechFrames++;
+      } else {
+        // Probability between thresholds - treat as uncertain
+        console.log(`[VAD] Uncertain state - prob: ${probability.toFixed(3)} (between ${this.config.negativeSpeechThreshold} and ${this.config.positiveSpeechThreshold})`);
       }
-      // Probabilities between thresholds are ignored
     }
 
     return this.state === 'speech';
@@ -326,18 +321,28 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
    * End speech and emit events
    */
   private endSpeech(timestamp: number, probability: number): void {
-    const speechDuration = timestamp - this.speechStartTime;
-    if (speechDuration >= this.config.minSpeechDuration) {
-      // Valid speech segment
-      const segment = this.createSpeechSegment(timestamp);
-      const eventData: VADEventData = {
-        isSpeech: false,
-        probability,
-        timestamp,
-        segment
-      };
-      this.emit('speech-end', eventData);
+    const speechDurationSeconds = timestamp - this.speechStartTime;
+    const speechDurationMs = speechDurationSeconds * 1000;
+    console.log(`[VAD] endSpeech called - startTime: ${this.speechStartTime.toFixed(3)}s, endTime: ${timestamp.toFixed(3)}s, duration: ${speechDurationMs.toFixed(0)}ms, minDuration: ${this.config.minSpeechDuration}ms`);
+
+    // Always emit speech-end event for state consistency
+    // Only include segment if duration meets minimum threshold
+    let segment: { start: number; end: number; duration: number; audioData?: Float32Array } | undefined;
+
+    if (speechDurationMs >= this.config.minSpeechDuration) {
+      console.log(`[VAD] Speech segment valid, including segment data`);
+      segment = this.createSpeechSegment(timestamp);
+    } else {
+      console.log(`[VAD] Speech segment too short (${speechDurationMs.toFixed(0)}ms < ${this.config.minSpeechDuration}ms), no segment data`);
     }
+
+    const eventData: VADEventData = {
+      isSpeech: false,
+      probability,
+      timestamp,
+      segment
+    };
+    this.emit('speech-end', eventData);
 
     // Reset state
     this.state = 'non-speech';
@@ -373,15 +378,20 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
       offset += chunk.length;
     }
 
-    // Calculate segment boundaries ensuring no negative values
-    const segmentStart = Math.max(0, this.currentSegmentStart - this.config.preSpeechPadDuration);
-    const segmentEnd = endTime;
-    const segmentDuration = segmentEnd - segmentStart;
+    // Calculate duration based on actual audio data length (more accurate)
+    // Sample rate is 16kHz (16000 samples per second)
+    const durationMs = (totalLength / 16000) * 1000;
+
+    // Calculate start time based on end time and actual duration
+    const startTimeSeconds = endTime - (durationMs / 1000);
+    const segmentStart = Math.max(0, startTimeSeconds);
+
+    console.log(`[VAD] createSpeechSegment - audioLength: ${totalLength} samples, duration: ${durationMs.toFixed(0)}ms, start: ${segmentStart.toFixed(3)}s, end: ${endTime.toFixed(3)}s`);
 
     return {
-      start: segmentStart,
-      end: segmentEnd,
-      duration: segmentDuration,
+      start: segmentStart,      // in seconds
+      end: endTime,              // in seconds
+      duration: durationMs,      // in milliseconds
       audioData
     };
   }

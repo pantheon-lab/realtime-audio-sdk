@@ -143,3 +143,10 @@ vite.config.ts.timestamp-*
 # Test files
 tests/*.wav
 tests/*.onnx
+
+# ONNX Runtime WASM files (copied from node_modules)
+examples/public/*.wasm
+examples/public/*.mjs
+
+# VAD models (large files, download separately)
+examples/public/models/*.onnx
