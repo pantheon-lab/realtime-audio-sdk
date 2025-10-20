@@ -51,7 +51,8 @@
   },
   "homepage": "https://github.com/realtime-ai/realtime-audio-sdk#readme",
   "publishConfig": {
-    "registry": "https://npm.pkg.github.com"
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
   },
   "devDependencies": {
     "@types/node": "^20.11.5",
