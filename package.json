@@ -1,5 +1,5 @@
 {
-  "name": "@realtime-ai/audio-sdk",
+  "name": "@pantheonlab/audio-sdk",
   "version": "0.1.0",
   "description": "Realtime Audio SDK for the Web — audio capture, echo cancellation (AEC), voice activity detection (VAD), and real-time encoding (Opus/AAC/PCM)",
   "type": "module",
@@ -13,9 +13,7 @@
       "types": "./dist/index.d.ts"
     }
   },
-  "files": [
-    "dist"
-  ],
+  "files": ["dist"],
   "scripts": {
     "prepare": "husky",
     "copy:wasm": "mkdir -p examples/public && cp node_modules/onnxruntime-web/dist/*.wasm node_modules/onnxruntime-web/dist/*.mjs examples/public/ 2>/dev/null || true",
