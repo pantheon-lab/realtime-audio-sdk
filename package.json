@@ -1,6 +1,6 @@
 {
   "name": "@pantheonlab/audio-sdk",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Realtime Audio SDK for the Web — audio capture, echo cancellation (AEC), voice activity detection (VAD), and real-time encoding (Opus/AAC/PCM)",
   "type": "module",
   "main": "./dist/index.cjs",
@@ -60,6 +60,7 @@
     "@types/node": "^20.11.5",
     "@typescript-eslint/eslint-plugin": "^6.19.1",
     "@typescript-eslint/parser": "^6.19.1",
+    "@vitest/ui": "^1.6.1",
     "eslint": "^8.56.0",
     "husky": "^9.1.7",
     "lint-staged": "^16.2.3",

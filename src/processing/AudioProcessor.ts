@@ -1,15 +1,15 @@
+import { EventEmitter } from "../core/EventEmitter";
 import type {
   AudioProcessorResult,
   ProcessingConfig,
+  VADSegmentEvent,
   VADStateEvent,
-  VADSegmentEvent
-} from '../types';
-import { EventEmitter } from '../core/EventEmitter';
-import { SileroVAD } from '../vad/SileroVAD';
+} from "../types";
+import { SileroVAD } from "../vad/SileroVAD";
 
 interface AudioProcessorEvents {
-  'speech-state': (event: VADStateEvent) => void;
-  'speech-segment': (event: VADSegmentEvent) => void;
+  "speech-state": (event: VADStateEvent) => void;
+  "speech-segment": (event: VADSegmentEvent) => void;
 }
 
 /**
@@ -29,69 +29,75 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
    */
   async initialize(): Promise<void> {
     const vadConfig = this.config.vad;
-    console.log('AudioProcessor.initialize() - VAD config:', vadConfig);
+    console.log("AudioProcessor.initialize() - VAD config:", vadConfig);
     if (vadConfig?.enabled) {
       // Always use Silero VAD when VAD is enabled
-      console.log('Initializing Silero VAD...');
+      console.log("Initializing Silero VAD...");
       this.sileroVAD = new SileroVAD(vadConfig);
       await this.sileroVAD.initialize();
-      console.log('Silero VAD initialized successfully');
+      console.log("Silero VAD initialized successfully");
 
       // Forward Silero VAD events with new format
-      this.sileroVAD.on('speech-start', (data) => {
-        this.emitVADEvent('start', data);
+      this.sileroVAD.on("speech-start", (data) => {
+        this.emitVADEvent("start", data);
       });
 
-      this.sileroVAD.on('speech-end', (data) => {
-        this.emitVADEvent('end', data);
+      this.sileroVAD.on("speech-end", (data) => {
+        this.emitVADEvent("end", data);
       });
     } else {
-      console.log('VAD not enabled or config missing');
+      console.log("VAD not enabled or config missing");
     }
   }
 
   /**
    * Helper method to emit VAD events
    */
-  private emitVADEvent(type: 'start' | 'end', data: {
-    isSpeech: boolean;
-    probability: number;
-    timestamp: number;
-    segment?: {
-      start: number;
-      end: number;
-      duration: number;
-      audioData?: Float32Array;
-    };
-  }): void {
-    console.log(`[AudioProcessor] emitVADEvent called - type: ${type}, hasSegment: ${!!data.segment}`);
+  private emitVADEvent(
+    type: "start" | "end",
+    data: {
+      isSpeech: boolean;
+      probability: number;
+      timestamp: number;
+      segment?: {
+        start: number;
+        end: number;
+        duration: number;
+        audioData?: Float32Array;
+      };
+    }
+  ): void {
+    console.log(
+      `[AudioProcessor] emitVADEvent called - type: ${type}, hasSegment: ${!!data.segment}`
+    );
 
     const event: VADStateEvent = {
       type,
       timestamp: data.timestamp,
       probability: data.probability,
-      duration: type === 'end' && data.segment ? data.segment.duration : undefined
+      duration:
+        type === "end" && data.segment ? data.segment.duration : undefined,
     };
     console.log(`[AudioProcessor] Emitting speech-state event:`, event);
-    this.emit('speech-state', event);
+    this.emit("speech-state", event);
 
     // Emit speech-segment event if segment data is available
-    if (type === 'end' && data.segment) {
+    if (type === "end" && data.segment) {
       const segmentEvent: VADSegmentEvent = {
         audio: data.segment.audioData || new Float32Array(0),
-        startTime: data.segment.start * 1000,      // Convert seconds to milliseconds
-        endTime: data.segment.end * 1000,          // Convert seconds to milliseconds
-        duration: data.segment.duration,           // Already in milliseconds
+        startTime: data.segment.start * 1000, // Convert seconds to milliseconds
+        endTime: data.segment.end * 1000, // Convert seconds to milliseconds
+        duration: data.segment.duration, // Already in milliseconds
         avgProbability: data.probability,
-        confidence: this.calculateConfidence(data.probability)
+        confidence: this.calculateConfidence(data.probability),
       };
       console.log(`[AudioProcessor] Emitting speech-segment event:`, {
         duration: segmentEvent.duration,
         audioLength: segmentEvent.audio.length,
-        startTime: segmentEvent.startTime.toFixed(0) + 'ms',
-        endTime: segmentEvent.endTime.toFixed(0) + 'ms'
+        startTime: segmentEvent.startTime.toFixed(0) + "ms",
+        endTime: segmentEvent.endTime.toFixed(0) + "ms",
       });
-      this.emit('speech-segment', segmentEvent);
+      this.emit("speech-segment", segmentEvent);
     }
   }
 
@@ -109,7 +115,10 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
   /**
    * Process audio data
    */
-  async process(audioData: Float32Array, timestamp: number): Promise<AudioProcessorResult> {
+  async process(
+    audioData: Float32Array,
+    timestamp: number
+  ): Promise<AudioProcessorResult> {
     let processedData = audioData;
 
     // Normalize audio if enabled
@@ -128,10 +137,12 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
       const result = await this.sileroVAD.process(processedData, timestamp);
       vadResult = {
         isSpeech: result.isSpeech,
-        probability: result.probability
+        probability: result.probability,
       };
     } else if (this.config.vad?.enabled && !this.sileroVAD) {
-      console.warn('VAD enabled but SileroVAD not initialized. Call initialize() first.');
+      console.warn(
+        "VAD enabled but SileroVAD not initialized. Call initialize() first."
+      );
     }
 
     return {
@@ -167,7 +178,6 @@ export class AudioProcessor extends EventEmitter<AudioProcessorEvents> {
     }
     return Math.sqrt(sum / data.length);
   }
-
 
   /**
    * Update configuration
