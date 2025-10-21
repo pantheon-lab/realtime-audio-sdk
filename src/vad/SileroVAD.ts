@@ -23,13 +23,13 @@ interface SileroVADEvents {
  * Silero VAD implementation using ONNX Runtime
  */
 export class SileroVAD extends EventEmitter<SileroVADEvents> {
-  private session: any | null = null;
+  private session: ort.InferenceSession | null = null;
   private config: Required<SileroVADConfig>;
   private state: "non-speech" | "speech" = "non-speech";
 
   // Model states
-  private stateTensor: any | null = null; // State tensor [2, 1, 128] for Silero v5
-  private srTensor: any; // Sample rate tensor
+  private stateTensor: ort.Tensor | null = null; // State tensor [2, 1, 128] for Silero v5
+  private srTensor: ort.Tensor | null = null; // Sample rate tensor
 
   // Buffer management
   private audioBuffer: Float32Array[] = [];
@@ -228,10 +228,10 @@ export class SileroVAD extends EventEmitter<SileroVADEvents> {
     const inputTensor = new ort.Tensor("float32", frame, [1, frame.length]);
 
     // Prepare feeds for Silero v5 model
-    const inputs = {
+    const inputs: ort.InferenceSession.FeedsType = {
       input: inputTensor,
       state: this.stateTensor,
-      sr: this.srTensor,
+      sr: this.srTensor as ort.Tensor,
     };
 
     // Run inference
